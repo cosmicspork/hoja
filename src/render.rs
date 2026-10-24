@@ -28,7 +28,10 @@ fn groups<'a>(resolved: &'a Resolved, name: &str) -> Vec<(Option<&'a Record>, Ve
     let Some(section) = resolved.sections.iter().find(|s| s.name == name) else {
         return Vec::new();
     };
-    let group_by = resolved.config.section(name).and_then(|s| s.group_by.as_deref());
+    let group_by = resolved
+        .config
+        .section(name)
+        .and_then(|s| s.group_by.as_deref());
     let Some(group_by) = group_by else {
         return vec![(None, section.records.iter().collect())];
     };
@@ -40,7 +43,10 @@ fn groups<'a>(resolved: &'a Resolved, name: &str) -> Vec<(Option<&'a Record>, Ve
             .and_then(Value::as_str)
             .and_then(|id| resolved.refs.get(id));
         let key = target.map(|t| t.id.as_str());
-        match out.iter_mut().find(|(g, _)| g.map(|g| g.id.as_str()) == key) {
+        match out
+            .iter_mut()
+            .find(|(g, _)| g.map(|g| g.id.as_str()) == key)
+        {
             Some((_, items)) => items.push(record),
             None => out.push((target, vec![record])),
         }
@@ -101,7 +107,10 @@ fn sanitize(segment: &str) -> String {
         if !out.is_empty() {
             out.push('_');
         }
-        out.extend(word.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')));
+        out.extend(
+            word.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')),
+        );
     }
     out.trim_matches('.').to_string()
 }
@@ -164,7 +173,11 @@ fn item_line(config: &TypeConfig, pattern: Option<&str>, record: &Record) -> Str
         let value = if placeholder == "id" {
             record.id.clone()
         } else {
-            record.fields.get(placeholder).map(display).unwrap_or_default()
+            record
+                .fields
+                .get(placeholder)
+                .map(display)
+                .unwrap_or_default()
         };
         line = line.replace(&format!("{{{placeholder}}}"), &value);
     }
@@ -175,10 +188,13 @@ fn item_line(config: &TypeConfig, pattern: Option<&str>, record: &Record) -> Str
     line.trim().to_string()
 }
 
+/// A section's groups: an optional heading over its item lines.
+type Groups = Vec<(Option<String>, Vec<String>)>;
+
 struct Outline {
     title: String,
     fields: Vec<(String, String, bool)>,
-    sections: Vec<(String, Vec<(Option<String>, Vec<String>)>)>,
+    sections: Vec<(String, Groups)>,
 }
 
 fn outline(resolved: &Resolved) -> Outline {
@@ -189,7 +205,10 @@ fn outline(resolved: &Resolved) -> Outline {
         .iter()
         .filter_map(|(name, field)| {
             let value = resolved.document.fields.get(name).map(display)?;
-            let title = field.title.clone().unwrap_or_else(|| name.replace('_', " "));
+            let title = field
+                .title
+                .clone()
+                .unwrap_or_else(|| name.replace('_', " "));
             Some((title, value, field.ty == FieldType::Text))
         })
         .collect();
@@ -198,7 +217,10 @@ fn outline(resolved: &Resolved) -> Outline {
         .sections
         .iter()
         .map(|section| {
-            let title = section.title.clone().unwrap_or_else(|| section.name.clone());
+            let title = section
+                .title
+                .clone()
+                .unwrap_or_else(|| section.name.clone());
             let groups = groups(resolved, &section.name)
                 .into_iter()
                 .map(|(target, items)| {
@@ -213,7 +235,11 @@ fn outline(resolved: &Resolved) -> Outline {
             (title, groups)
         })
         .collect();
-    Outline { title: resolved.document.title.clone(), fields, sections }
+    Outline {
+        title: resolved.document.title.clone(),
+        fields,
+        sections,
+    }
 }
 
 pub fn markdown(resolved: &Resolved) -> String {
@@ -261,7 +287,11 @@ pub fn html(resolved: &Resolved) -> String {
                 body.push_str(&format!("<p>{}</p>\n", escape(paragraph.trim())));
             }
         } else {
-            body.push_str(&format!("<p><strong>{}:</strong> {}</p>\n", escape(title), escape(value)));
+            body.push_str(&format!(
+                "<p><strong>{}:</strong> {}</p>\n",
+                escape(title),
+                escape(value)
+            ));
         }
     }
     for (title, groups) in &outline.sections {
@@ -338,7 +368,9 @@ impl Typst {
             .map_err(|e| RenderError::Io(format!("copying templates/: {e}")))?;
         let entry = root.path().join(template);
         if !entry.is_file() {
-            return Err(RenderError::Io(format!("templates/{template} does not exist")));
+            return Err(RenderError::Io(format!(
+                "templates/{template} does not exist"
+            )));
         }
         std::fs::write(root.path().join("data.json"), data.to_string()).map_err(io)?;
         let output = root.path().join("hoja-out.pdf");
@@ -360,7 +392,9 @@ impl Typst {
         if !run.status.success() {
             let stderr = String::from_utf8_lossy(&run.stderr);
             let root_text = root.path().display().to_string();
-            return Err(RenderError::Compile(stderr.replace(&root_text, "templates").trim().to_string()));
+            return Err(RenderError::Compile(
+                stderr.replace(&root_text, "templates").trim().to_string(),
+            ));
         }
         std::fs::read(&output).map_err(io)
     }

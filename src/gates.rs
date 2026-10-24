@@ -125,7 +125,12 @@ person_only = true
     }
 
     fn write<'a>(op: Op, kind: Option<&'a str>, settled: bool, fields: &'a [String]) -> Write<'a> {
-        Write { op, kind, settled, fields }
+        Write {
+            op,
+            kind,
+            settled,
+            fields,
+        }
     }
 
     #[test]
@@ -156,26 +161,56 @@ person_only = true
     fn human_types_refuse_agent_first_drafts_and_card_everything_else() {
         let c = config("human", true);
         let text = ["text".to_string()];
-        assert!(matches!(route(&agent(), &c, write(Op::Create, Some("item"), false, &text)), Route::Refused(_)));
-        assert!(matches!(route(&agent(), &c, write(Op::Create, None, false, &[])), Route::Refused(_)));
-        assert_eq!(route(&agent(), &c, write(Op::Update, Some("item"), false, &text)), Route::Card);
-        assert_eq!(route(&agent(), &c, write(Op::Select, None, false, &[])), Route::Card);
+        assert!(matches!(
+            route(&agent(), &c, write(Op::Create, Some("item"), false, &text)),
+            Route::Refused(_)
+        ));
+        assert!(matches!(
+            route(&agent(), &c, write(Op::Create, None, false, &[])),
+            Route::Refused(_)
+        ));
+        assert_eq!(
+            route(&agent(), &c, write(Op::Update, Some("item"), false, &text)),
+            Route::Card
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Select, None, false, &[])),
+            Route::Card
+        );
     }
 
     #[test]
     fn agent_types_allow_direct_drafts_until_settled() {
         let c = config("agent", true);
         let text = ["text".to_string()];
-        assert_eq!(route(&agent(), &c, write(Op::Create, Some("item"), false, &text)), Route::Direct);
-        assert_eq!(route(&agent(), &c, write(Op::Update, Some("item"), false, &text)), Route::Direct);
-        assert_eq!(route(&agent(), &c, write(Op::Update, Some("item"), true, &text)), Route::Card);
-        assert_eq!(route(&agent(), &c, write(Op::Select, None, true, &[])), Route::Card);
+        assert_eq!(
+            route(&agent(), &c, write(Op::Create, Some("item"), false, &text)),
+            Route::Direct
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Update, Some("item"), false, &text)),
+            Route::Direct
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Update, Some("item"), true, &text)),
+            Route::Card
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Select, None, true, &[])),
+            Route::Card
+        );
     }
 
     #[test]
     fn agent_direct_false_only_tightens() {
         let c = config("agent", false);
-        assert_eq!(route(&agent(), &c, write(Op::Create, Some("item"), false, &[])), Route::Card);
-        assert_eq!(route(&agent(), &c, write(Op::Select, None, false, &[])), Route::Card);
+        assert_eq!(
+            route(&agent(), &c, write(Op::Create, Some("item"), false, &[])),
+            Route::Card
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Select, None, false, &[])),
+            Route::Card
+        );
     }
 }

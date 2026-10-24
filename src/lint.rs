@@ -17,7 +17,12 @@ fn texts(value: Option<&Value>) -> Vec<&str> {
     }
 }
 
-fn finding(level: Level, message: String, record: Option<&Record>, field: Option<&str>) -> LintFinding {
+fn finding(
+    level: Level,
+    message: String,
+    record: Option<&Record>,
+    field: Option<&str>,
+) -> LintFinding {
     LintFinding {
         level,
         message,
@@ -60,12 +65,22 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
         .filter(|r| seen.insert(r.id.clone()))
         .collect();
     let document_fields: &Map<String, Value> = &resolved.document.fields;
-    let of_kind = |kind: &str| -> Vec<&Record> { records.iter().copied().filter(|r| r.kind == kind).collect() };
+    let of_kind = |kind: &str| -> Vec<&Record> {
+        records.iter().copied().filter(|r| r.kind == kind).collect()
+    };
 
     for lint in &resolved.config.lints {
         match lint {
-            Lint::Forbid { pattern, kind, fields, level, message } => {
-                let Ok(re) = Regex::new(pattern) else { continue };
+            Lint::Forbid {
+                pattern,
+                kind,
+                fields,
+                level,
+                message,
+            } => {
+                let Ok(re) = Regex::new(pattern) else {
+                    continue;
+                };
                 let wanted = |name: &str| fields.is_empty() || fields.iter().any(|f| f == name);
                 let mut check = |record: Option<&Record>, map: &Map<String, Value>| {
                     for (name, value) in map {
@@ -74,9 +89,18 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
                         }
                         for text in texts(Some(value)) {
                             if let Some(hit) = re.find(text) {
-                                let whose = record.map(|r| record_label(resolved, r)).unwrap_or_else(|| "document".into());
-                                let text = message.clone().unwrap_or_else(|| format!("contains \"{}\"", hit.as_str()));
-                                findings.push(finding(*level, format!("{whose}, {name}: {text}"), record, Some(name)));
+                                let whose = record
+                                    .map(|r| record_label(resolved, r))
+                                    .unwrap_or_else(|| "document".into());
+                                let text = message
+                                    .clone()
+                                    .unwrap_or_else(|| format!("contains \"{}\"", hit.as_str()));
+                                findings.push(finding(
+                                    *level,
+                                    format!("{whose}, {name}: {text}"),
+                                    record,
+                                    Some(name),
+                                ));
                                 break;
                             }
                         }
@@ -97,27 +121,56 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
                     }
                 }
             }
-            Lint::Require { kind, field, level, message } => {
-                let text = message.clone().unwrap_or_else(|| format!("{field} is required"));
+            Lint::Require {
+                kind,
+                field,
+                level,
+                message,
+            } => {
+                let text = message
+                    .clone()
+                    .unwrap_or_else(|| format!("{field} is required"));
                 if kind == DOCUMENT_KIND {
                     if !document_fields.contains_key(field) {
-                        findings.push(finding(*level, format!("document: {text}"), None, Some(field)));
+                        findings.push(finding(
+                            *level,
+                            format!("document: {text}"),
+                            None,
+                            Some(field),
+                        ));
                     }
                 } else {
                     for record in of_kind(kind) {
                         if !record.fields.contains_key(field) {
                             let whose = record_label(resolved, record);
-                            findings.push(finding(*level, format!("{whose}: {text}"), Some(record), Some(field)));
+                            findings.push(finding(
+                                *level,
+                                format!("{whose}: {text}"),
+                                Some(record),
+                                Some(field),
+                            ));
                         }
                     }
                 }
             }
-            Lint::Match { kind, field, pattern, min, level, message } => {
-                let Ok(re) = Regex::new(pattern) else { continue };
+            Lint::Match {
+                kind,
+                field,
+                pattern,
+                min,
+                level,
+                message,
+            } => {
+                let Ok(re) = Regex::new(pattern) else {
+                    continue;
+                };
                 let mut check = |record: Option<&Record>, value: Option<&Value>| {
                     let values = texts(value);
-                    let bad: Vec<&str> = values.iter().copied().filter(|v| !re.is_match(v)).collect();
-                    let whose = record.map(|r| record_label(resolved, r)).unwrap_or_else(|| "document".into());
+                    let bad: Vec<&str> =
+                        values.iter().copied().filter(|v| !re.is_match(v)).collect();
+                    let whose = record
+                        .map(|r| record_label(resolved, r))
+                        .unwrap_or_else(|| "document".into());
                     if values.len() < *min || !bad.is_empty() {
                         let text = message.clone().unwrap_or_else(|| {
                             if bad.is_empty() {
@@ -126,7 +179,12 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
                                 format!("{field} has entries that don't match: {}", bad.join(", "))
                             }
                         });
-                        findings.push(finding(*level, format!("{whose}: {text}"), record, Some(field)));
+                        findings.push(finding(
+                            *level,
+                            format!("{whose}: {text}"),
+                            record,
+                            Some(field),
+                        ));
                     }
                 };
                 if kind == DOCUMENT_KIND {
@@ -137,13 +195,31 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
                     }
                 }
             }
-            Lint::MaxWords { kind, field, max, level, message } => {
+            Lint::MaxWords {
+                kind,
+                field,
+                max,
+                level,
+                message,
+            } => {
                 let mut check = |record: Option<&Record>, value: Option<&Value>| {
-                    let words: usize = texts(value).iter().map(|t| t.split_whitespace().count()).sum();
+                    let words: usize = texts(value)
+                        .iter()
+                        .map(|t| t.split_whitespace().count())
+                        .sum();
                     if words > *max {
-                        let whose = record.map(|r| record_label(resolved, r)).unwrap_or_else(|| "document".into());
-                        let text = message.clone().unwrap_or_else(|| format!("{field} has {words} words; the limit is {max}"));
-                        findings.push(finding(*level, format!("{whose}: {text}"), record, Some(field)));
+                        let whose = record
+                            .map(|r| record_label(resolved, r))
+                            .unwrap_or_else(|| "document".into());
+                        let text = message.clone().unwrap_or_else(|| {
+                            format!("{field} has {words} words; the limit is {max}")
+                        });
+                        findings.push(finding(
+                            *level,
+                            format!("{whose}: {text}"),
+                            record,
+                            Some(field),
+                        ));
                     }
                 };
                 if kind == DOCUMENT_KIND {
@@ -154,16 +230,21 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
                     }
                 }
             }
-            Lint::MaxItems { section, max, level, message } => {
+            Lint::MaxItems {
+                section,
+                max,
+                level,
+                message,
+            } => {
                 let count = resolved
                     .sections
                     .iter()
                     .find(|s| s.name == *section)
                     .map_or(0, |s| s.records.len());
                 if count > *max {
-                    let text = message
-                        .clone()
-                        .unwrap_or_else(|| format!("section `{section}` has {count} items; the limit is {max}"));
+                    let text = message.clone().unwrap_or_else(|| {
+                        format!("section `{section}` has {count} items; the limit is {max}")
+                    });
                     findings.push(finding(*level, text, None, None));
                 }
             }

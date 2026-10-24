@@ -277,24 +277,38 @@ impl TypeConfig {
                 bail!("invalid or duplicate section name `{}`", section.name);
             }
             seen.push(&section.name);
-            let kind = self
-                .kinds
-                .get(&section.kind)
-                .with_context(|| format!("section `{}`: unknown kind `{}`", section.name, section.kind))?;
+            let kind = self.kinds.get(&section.kind).with_context(|| {
+                format!(
+                    "section `{}`: unknown kind `{}`",
+                    section.name, section.kind
+                )
+            })?;
             for field in section.filter.keys() {
                 if !kind.fields.contains_key(field) {
-                    bail!("section `{}` filters on unknown field `{field}`", section.name);
+                    bail!(
+                        "section `{}` filters on unknown field `{field}`",
+                        section.name
+                    );
                 }
             }
             if let Some(group) = &section.group_by
-                && kind.fields.get(group).is_none_or(|f| f.ty != FieldType::Ref)
+                && kind
+                    .fields
+                    .get(group)
+                    .is_none_or(|f| f.ty != FieldType::Ref)
             {
-                bail!("section `{}` groups by `{group}`, which is not a ref field", section.name);
+                bail!(
+                    "section `{}` groups by `{group}`, which is not a ref field",
+                    section.name
+                );
             }
             if let Some(item) = &section.item {
                 for placeholder in placeholders(item) {
                     if !kind.fields.contains_key(placeholder) && placeholder != "id" {
-                        bail!("section `{}` item pattern names unknown field `{placeholder}`", section.name);
+                        bail!(
+                            "section `{}` item pattern names unknown field `{placeholder}`",
+                            section.name
+                        );
                     }
                 }
             }
@@ -412,11 +426,18 @@ fn validate_fields(
 
 /// `{name}` placeholders in a pattern, in order.
 pub fn placeholders(pattern: &str) -> impl Iterator<Item = &str> {
-    pattern.split('{').skip(1).filter_map(|s| s.split_once('}').map(|(p, _)| p))
+    pattern
+        .split('{')
+        .skip(1)
+        .filter_map(|s| s.split_once('}').map(|(p, _)| p))
 }
 
 /// Normalizes one submitted value. `None` means the field is cleared.
-pub fn normalize_value(name: &str, field: &FieldConfig, value: &Value) -> Result<Option<Value>, String> {
+pub fn normalize_value(
+    name: &str,
+    field: &FieldConfig,
+    value: &Value,
+) -> Result<Option<Value>, String> {
     let as_string = || -> Result<Option<String>, String> {
         match value {
             Value::Null => Ok(None),
@@ -441,7 +462,9 @@ pub fn normalize_value(name: &str, field: &FieldConfig, value: &Value) -> Result
                 continue;
             }
             if s.chars().count() > MAX_STRING {
-                return Err(format!("an entry of `{name}` is longer than {MAX_STRING} characters"));
+                return Err(format!(
+                    "an entry of `{name}` is longer than {MAX_STRING} characters"
+                ));
             }
             out.push(s.to_string());
         }
@@ -466,7 +489,10 @@ pub fn normalize_value(name: &str, field: &FieldConfig, value: &Value) -> Result
         },
         FieldType::Enum => match as_string()? {
             Some(s) if !field.options.contains(&s) => {
-                return Err(format!("`{name}` must be one of: {}", field.options.join(", ")));
+                return Err(format!(
+                    "`{name}` must be one of: {}",
+                    field.options.join(", ")
+                ));
             }
             other => other.map(Value::String),
         },
@@ -481,7 +507,7 @@ pub fn normalize_value(name: &str, field: &FieldConfig, value: &Value) -> Result
             Value::Bool(b) => Some(Value::Bool(*b)),
             _ => return Err(format!("`{name}` must be true or false")),
         },
-        FieldType::List => as_list()?.map(|l| Value::from(l)),
+        FieldType::List => as_list()?.map(Value::from),
         FieldType::Tags => as_list()?.map(|l| {
             let mut tags: Vec<String> = Vec::new();
             for tag in l {
@@ -618,7 +644,10 @@ impl Workspace {
                 .unwrap_or_default()
                 .to_string();
             if !valid_type_name(&name) {
-                bail!("type file name `{}` must be lowercase letters, digits and dashes", path.display());
+                bail!(
+                    "type file name `{}` must be lowercase letters, digits and dashes",
+                    path.display()
+                );
             }
             let body = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
@@ -688,7 +717,10 @@ options = ["done", "next"]
         let fields = &config.kind("item").unwrap().fields;
         let patch = json!({"tags": [" Rust ", "rust", ""], "text": "A", "when": "2026-10"});
         let next = apply_patch(fields, &Map::new(), patch.as_object().unwrap()).unwrap();
-        assert_eq!(Value::Object(next.clone()), json!({"text": "A", "tags": ["rust"], "when": "2026-10"}));
+        assert_eq!(
+            Value::Object(next.clone()),
+            json!({"text": "A", "tags": ["rust"], "when": "2026-10"})
+        );
         let clear = json!({"tags": null});
         let cleared = apply_patch(fields, &next, clear.as_object().unwrap()).unwrap();
         assert!(!cleared.contains_key("tags"));
@@ -699,7 +731,10 @@ options = ["done", "next"]
             json!({"when": "Oct 2026"}),
             json!({"nope": "x"}),
         ] {
-            assert!(apply_patch(fields, &next, bad.as_object().unwrap()).is_err(), "{bad}");
+            assert!(
+                apply_patch(fields, &next, bad.as_object().unwrap()).is_err(),
+                "{bad}"
+            );
         }
     }
 }

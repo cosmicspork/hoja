@@ -158,8 +158,10 @@ impl Store {
         }
         let mut types = HashMap::new();
         {
-            let mut statement = connection.prepare("SELECT name, accepted_body FROM type_configs")?;
-            let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let mut statement =
+                connection.prepare("SELECT name, accepted_body FROM type_configs")?;
+            let rows = statement
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
                 let (name, body) = row?;
                 let config = TypeConfig::parse(&body)
@@ -290,7 +292,11 @@ impl Store {
 
     // ---- records ----------------------------------------------------------
 
-    pub fn records(&self, type_name: Option<&str>, kind: Option<&str>) -> Result<Vec<Record>, StoreError> {
+    pub fn records(
+        &self,
+        type_name: Option<&str>,
+        kind: Option<&str>,
+    ) -> Result<Vec<Record>, StoreError> {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(&format!(
@@ -332,23 +338,39 @@ impl Store {
             .map_err(internal)
     }
 
-    pub fn create_record(&self, actor: &Actor, input: CreateRecord) -> Result<Outcome<Record>, StoreError> {
+    pub fn create_record(
+        &self,
+        actor: &Actor,
+        input: CreateRecord,
+    ) -> Result<Outcome<Record>, StoreError> {
         validate_note(&input.note)?;
         let config = self.config(&input.type_name)?;
         let kind = config
             .kind(&input.kind)
             .ok_or_else(|| StoreError::Invalid(format!("unknown kind `{}`", input.kind)))?;
         let names: Vec<String> = input.fields.keys().cloned().collect();
-        let write = Write { op: Op::Create, kind: Some(&input.kind), settled: false, fields: &names };
+        let write = Write {
+            op: Op::Create,
+            kind: Some(&input.kind),
+            settled: false,
+            fields: &names,
+        };
         let route = gates::route(actor, &config, write);
-        let fields = apply_patch(&kind.fields, &Map::new(), &input.fields).map_err(StoreError::Invalid)?;
+        let fields =
+            apply_patch(&kind.fields, &Map::new(), &input.fields).map_err(StoreError::Invalid)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
         validate_refs(&tx, &input.type_name, &kind.fields, &fields)?;
         let outcome = match route {
             Route::Refused(reason) => return Err(StoreError::Refused(reason)),
             Route::Direct => Outcome::Applied {
-                result: insert_record(&tx, &input.type_name, &input.kind, &fields, Attrib::of(actor))?,
+                result: insert_record(
+                    &tx,
+                    &input.type_name,
+                    &input.kind,
+                    &fields,
+                    Attrib::of(actor),
+                )?,
             },
             Route::Card => Outcome::AwaitingPerson {
                 approval_id: open_card(
@@ -367,7 +389,12 @@ impl Store {
         Ok(outcome)
     }
 
-    pub fn update_record(&self, actor: &Actor, id: &str, input: UpdateRecord) -> Result<Outcome<Record>, StoreError> {
+    pub fn update_record(
+        &self,
+        actor: &Actor,
+        id: &str,
+        input: UpdateRecord,
+    ) -> Result<Outcome<Record>, StoreError> {
         validate_note(&input.note)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
@@ -376,16 +403,22 @@ impl Store {
             return Err(StoreError::Conflict);
         }
         let config = self.config(&record.type_name)?;
-        let kind = config
-            .kind(&record.kind)
-            .ok_or_else(|| StoreError::Invalid(format!("kind `{}` is no longer in its type", record.kind)))?;
+        let kind = config.kind(&record.kind).ok_or_else(|| {
+            StoreError::Invalid(format!("kind `{}` is no longer in its type", record.kind))
+        })?;
         let names: Vec<String> = input.fields.keys().cloned().collect();
-        let write = Write { op: Op::Update, kind: Some(&record.kind), settled: record.reviewed, fields: &names };
+        let write = Write {
+            op: Op::Update,
+            kind: Some(&record.kind),
+            settled: record.reviewed,
+            fields: &names,
+        };
         let route = gates::route(actor, &config, write);
         if let Route::Refused(reason) = route {
             return Err(StoreError::Refused(reason));
         }
-        let next = apply_patch(&kind.fields, &record.fields, &input.fields).map_err(StoreError::Invalid)?;
+        let next = apply_patch(&kind.fields, &record.fields, &input.fields)
+            .map_err(StoreError::Invalid)?;
         validate_refs(&tx, &record.type_name, &kind.fields, &next)?;
         if next == record.fields {
             return Ok(Outcome::Applied { result: record });
@@ -417,7 +450,13 @@ impl Store {
         Ok(outcome)
     }
 
-    pub fn set_reviewed(&self, actor: &Actor, id: &str, version: i64, reviewed: bool) -> Result<Record, StoreError> {
+    pub fn set_reviewed(
+        &self,
+        actor: &Actor,
+        id: &str,
+        version: i64,
+        reviewed: bool,
+    ) -> Result<Record, StoreError> {
         gates::person_only_action(actor, "mark content reviewed").map_err(StoreError::Refused)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
@@ -436,7 +475,15 @@ impl Store {
         .map_err(internal)?;
         let record = load_live_record(&tx, id)?;
         let change = if reviewed { "reviewed" } else { "unreviewed" };
-        write_revision(&tx, "record", id, record.version, Attrib::of(actor), change, &record_snapshot(&record))?;
+        write_revision(
+            &tx,
+            "record",
+            id,
+            record.version,
+            Attrib::of(actor),
+            change,
+            &record_snapshot(&record),
+        )?;
         tx.commit().map_err(internal)?;
         Ok(record)
     }
@@ -455,7 +502,15 @@ impl Store {
             params![id, now],
         )
         .map_err(internal)?;
-        write_revision(&tx, "record", id, record.version + 1, Attrib::of(actor), "delete", &record_snapshot(&record))?;
+        write_revision(
+            &tx,
+            "record",
+            id,
+            record.version + 1,
+            Attrib::of(actor),
+            "delete",
+            &record_snapshot(&record),
+        )?;
         tx.commit().map_err(internal)?;
         Ok(())
     }
@@ -493,7 +548,11 @@ impl Store {
         let mut document = load_document(connection, id)?.ok_or(StoreError::NotFound)?;
         let config = self.config(&document.type_name)?;
         let approved_hash: Option<String> = connection
-            .query_row("SELECT approved_hash FROM documents WHERE id=?1", params![id], |r| r.get(0))
+            .query_row(
+                "SELECT approved_hash FROM documents WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
             .map_err(internal)?;
         let mut sections = Vec::new();
         let mut missing = Vec::new();
@@ -521,29 +580,51 @@ impl Store {
                     _ => missing.push((section.name.clone(), record_id)),
                 }
             }
-            sections.push(ResolvedSection { name: section.name.clone(), records });
+            sections.push(ResolvedSection {
+                name: section.name.clone(),
+                records,
+            });
         }
-        let mut resolved = Resolved { config, document: document.clone(), sections, refs, missing };
+        let mut resolved = Resolved {
+            config,
+            document: document.clone(),
+            sections,
+            refs,
+            missing,
+        };
         document.approved = approved_hash.is_some_and(|h| h == resolved.content_hash());
         resolved.document = document;
         Ok(resolved)
     }
 
-    pub fn create_document(&self, actor: &Actor, input: CreateDocument) -> Result<Outcome<Document>, StoreError> {
+    pub fn create_document(
+        &self,
+        actor: &Actor,
+        input: CreateDocument,
+    ) -> Result<Outcome<Document>, StoreError> {
         validate_note(&input.note)?;
         let title = validate_title(&input.title)?;
         let config = self.config(&input.type_name)?;
         let names: Vec<String> = input.fields.keys().cloned().collect();
-        let write = Write { op: Op::Create, kind: None, settled: false, fields: &names };
+        let write = Write {
+            op: Op::Create,
+            kind: None,
+            settled: false,
+            fields: &names,
+        };
         let route = gates::route(actor, &config, write);
-        let fields = apply_patch(&config.document.fields, &Map::new(), &input.fields).map_err(StoreError::Invalid)?;
+        let fields = apply_patch(&config.document.fields, &Map::new(), &input.fields)
+            .map_err(StoreError::Invalid)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
         let outcome = match route {
             Route::Refused(reason) => return Err(StoreError::Refused(reason)),
             Route::Direct => {
-                let id = insert_document(&tx, &input.type_name, &title, &fields, Attrib::of(actor))?;
-                Outcome::Applied { result: self.resolve_in(&tx, &id)?.document }
+                let id =
+                    insert_document(&tx, &input.type_name, &title, &fields, Attrib::of(actor))?;
+                Outcome::Applied {
+                    result: self.resolve_in(&tx, &id)?.document,
+                }
             }
             Route::Card => Outcome::AwaitingPerson {
                 approval_id: open_card(
@@ -562,7 +643,12 @@ impl Store {
         Ok(outcome)
     }
 
-    pub fn update_document(&self, actor: &Actor, id: &str, input: UpdateDocument) -> Result<Outcome<Document>, StoreError> {
+    pub fn update_document(
+        &self,
+        actor: &Actor,
+        id: &str,
+        input: UpdateDocument,
+    ) -> Result<Outcome<Document>, StoreError> {
         validate_note(&input.note)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
@@ -572,7 +658,12 @@ impl Store {
         }
         let config = self.config(&document.type_name)?;
         let names: Vec<String> = input.fields.keys().cloned().collect();
-        let write = Write { op: Op::Update, kind: None, settled: document.approved_at.is_some(), fields: &names };
+        let write = Write {
+            op: Op::Update,
+            kind: None,
+            settled: document.approved_at.is_some(),
+            fields: &names,
+        };
         let route = gates::route(actor, &config, write);
         if let Route::Refused(reason) = route {
             return Err(StoreError::Refused(reason));
@@ -581,9 +672,12 @@ impl Store {
             Some(title) => validate_title(title)?,
             None => document.title.clone(),
         };
-        let fields = apply_patch(&config.document.fields, &document.fields, &input.fields).map_err(StoreError::Invalid)?;
+        let fields = apply_patch(&config.document.fields, &document.fields, &input.fields)
+            .map_err(StoreError::Invalid)?;
         if title == document.title && fields == document.fields {
-            return Ok(Outcome::Applied { result: self.resolve_in(&tx, id)?.document });
+            return Ok(Outcome::Applied {
+                result: self.resolve_in(&tx, id)?.document,
+            });
         }
         let outcome = match route {
             Route::Card => {
@@ -610,14 +704,22 @@ impl Store {
             }
             _ => {
                 write_document_fields(&tx, id, &title, &fields, Attrib::of(actor))?;
-                Outcome::Applied { result: self.resolve_in(&tx, id)?.document }
+                Outcome::Applied {
+                    result: self.resolve_in(&tx, id)?.document,
+                }
             }
         };
         tx.commit().map_err(internal)?;
         Ok(outcome)
     }
 
-    pub fn select(&self, actor: &Actor, id: &str, section: &str, input: SelectSection) -> Result<Outcome<Document>, StoreError> {
+    pub fn select(
+        &self,
+        actor: &Actor,
+        id: &str,
+        section: &str,
+        input: SelectSection,
+    ) -> Result<Outcome<Document>, StoreError> {
         validate_note(&input.note)?;
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
@@ -626,15 +728,28 @@ impl Store {
             return Err(StoreError::Conflict);
         }
         let config = self.config(&document.type_name)?;
-        let write = Write { op: Op::Select, kind: None, settled: document.approved_at.is_some(), fields: &[] };
+        let write = Write {
+            op: Op::Select,
+            kind: None,
+            settled: document.approved_at.is_some(),
+            fields: &[],
+        };
         let route = gates::route(actor, &config, write);
         if let Route::Refused(reason) = route {
             return Err(StoreError::Refused(reason));
         }
-        validate_selection(&tx, &config, &document.type_name, section, &input.record_ids)?;
+        validate_selection(
+            &tx,
+            &config,
+            &document.type_name,
+            section,
+            &input.record_ids,
+        )?;
         let current = section_ids(&document, section);
         if current == input.record_ids {
-            return Ok(Outcome::Applied { result: self.resolve_in(&tx, id)?.document });
+            return Ok(Outcome::Applied {
+                result: self.resolve_in(&tx, id)?.document,
+            });
         }
         let outcome = match route {
             Route::Card => Outcome::AwaitingPerson {
@@ -651,7 +766,9 @@ impl Store {
             },
             _ => {
                 write_section(&tx, id, section, &input.record_ids, Attrib::of(actor))?;
-                Outcome::Applied { result: self.resolve_in(&tx, id)?.document }
+                Outcome::Applied {
+                    result: self.resolve_in(&tx, id)?.document,
+                }
             }
         };
         tx.commit().map_err(internal)?;
@@ -660,7 +777,13 @@ impl Store {
 
     /// Records the person's approval of the document's current content.
     /// `blocking` is the number of error-level lint findings, which must be zero.
-    pub fn approve_document(&self, actor: &Actor, id: &str, version: i64, blocking: usize) -> Result<Document, StoreError> {
+    pub fn approve_document(
+        &self,
+        actor: &Actor,
+        id: &str,
+        version: i64,
+        blocking: usize,
+    ) -> Result<Document, StoreError> {
         gates::person_only_action(actor, "approve documents").map_err(StoreError::Refused)?;
         if blocking > 0 {
             return Err(StoreError::Invalid(format!(
@@ -675,7 +798,9 @@ impl Store {
             return Err(StoreError::Conflict);
         }
         if !resolved.missing.is_empty() {
-            return Err(StoreError::Invalid("remove deleted records from the selection first".into()));
+            return Err(StoreError::Invalid(
+                "remove deleted records from the selection first".into(),
+            ));
         }
         let hash = resolved.content_hash();
         tx.execute(
@@ -684,7 +809,15 @@ impl Store {
         )
         .map_err(internal)?;
         let document = self.resolve_in(&tx, id)?.document;
-        write_revision(&tx, "document", id, document.version, Attrib::of(actor), "approve", &document_snapshot(&document))?;
+        write_revision(
+            &tx,
+            "document",
+            id,
+            document.version,
+            Attrib::of(actor),
+            "approve",
+            &document_snapshot(&document),
+        )?;
         tx.commit().map_err(internal)?;
         Ok(document)
     }
@@ -694,7 +827,9 @@ impl Store {
     pub fn approvals(&self, state: Option<&str>) -> Result<Vec<Approval>, StoreError> {
         let connection = self.lock()?;
         let mut statement = connection
-            .prepare(&format!("{APPROVAL_SELECT} WHERE (?1 IS NULL OR state=?1) ORDER BY created_at, id"))
+            .prepare(&format!(
+                "{APPROVAL_SELECT} WHERE (?1 IS NULL OR state=?1) ORDER BY created_at, id"
+            ))
             .map_err(internal)?;
         let mut approvals = statement
             .query_map(params![state], approval_from_row)
@@ -716,12 +851,18 @@ impl Store {
 
     pub fn decide(&self, actor: &Actor, id: &str, input: Decide) -> Result<Approval, StoreError> {
         gates::person_only_action(actor, "decide cards").map_err(StoreError::Refused)?;
-        let reason = input.reason.as_deref().map(str::trim).filter(|r| !r.is_empty());
+        let reason = input
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty());
         if let Some(reason) = reason {
             validate_note(reason)?;
         }
         if input.decision != Decision::Accept && input.payload.is_some() {
-            return Err(StoreError::Invalid("only an accepted card takes an edited payload".into()));
+            return Err(StoreError::Invalid(
+                "only an accepted card takes an edited payload".into(),
+            ));
         }
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
@@ -732,7 +873,11 @@ impl Store {
         let now = now_utc();
         match input.decision {
             Decision::Reject | Decision::RequestChanges => {
-                let state = if input.decision == Decision::Reject { "rejected" } else { "changes_requested" };
+                let state = if input.decision == Decision::Reject {
+                    "rejected"
+                } else {
+                    "changes_requested"
+                };
                 tx.execute(
                     "UPDATE approvals SET state=?2, reason=?3, decided_at=?4 WHERE id=?1",
                     params![id, state, reason, now],
@@ -767,7 +912,13 @@ impl Store {
 
     /// Applies an accepted card's payload, re-checking it against the type as
     /// it is now, since the person may have accepted a new type file meanwhile.
-    fn apply_card(&self, tx: &Connection, approval: &Approval, payload: &Value, edited: bool) -> Result<Value, StoreError> {
+    fn apply_card(
+        &self,
+        tx: &Connection,
+        approval: &Approval,
+        payload: &Value,
+        edited: bool,
+    ) -> Result<Value, StoreError> {
         let config = self.config(&approval.type_name)?;
         let agent = Actor::Agent(approval.agent.clone());
         let attrib = Attrib {
@@ -777,39 +928,62 @@ impl Store {
             edited,
         };
         let fields_of = |payload: &Value| -> Map<String, Value> {
-            payload.get("fields").and_then(Value::as_object).cloned().unwrap_or_default()
+            payload
+                .get("fields")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default()
         };
         let recheck = |write: Write<'_>| -> Result<(), StoreError> {
             match gates::route(&agent, &config, write) {
-                Route::Refused(reason) => Err(StoreError::Refused(format!("this card can no longer be accepted: {reason}"))),
+                Route::Refused(reason) => Err(StoreError::Refused(format!(
+                    "this card can no longer be accepted: {reason}"
+                ))),
                 _ => Ok(()),
             }
         };
-        let target = || approval.target_id.as_deref().ok_or(StoreError::Internal("card without a target".into()));
+        let target = || {
+            approval
+                .target_id
+                .as_deref()
+                .ok_or(StoreError::Internal("card without a target".into()))
+        };
         match approval.action {
             Action::RecordCreate => {
                 let kind_name = payload["kind"].as_str().unwrap_or_default();
-                let kind = config
-                    .kind(kind_name)
-                    .ok_or_else(|| StoreError::Invalid(format!("kind `{kind_name}` is no longer in its type")))?;
+                let kind = config.kind(kind_name).ok_or_else(|| {
+                    StoreError::Invalid(format!("kind `{kind_name}` is no longer in its type"))
+                })?;
                 let patch = fields_of(payload);
                 let names: Vec<String> = patch.keys().cloned().collect();
                 // A person's acceptance stands in for the agent, so only the person-only check applies.
-                recheck(Write { op: Op::Update, kind: Some(kind_name), settled: false, fields: &names })?;
-                let fields = apply_patch(&kind.fields, &Map::new(), &patch).map_err(StoreError::Invalid)?;
+                recheck(Write {
+                    op: Op::Update,
+                    kind: Some(kind_name),
+                    settled: false,
+                    fields: &names,
+                })?;
+                let fields =
+                    apply_patch(&kind.fields, &Map::new(), &patch).map_err(StoreError::Invalid)?;
                 validate_refs(tx, &approval.type_name, &kind.fields, &fields)?;
                 let record = insert_record(tx, &approval.type_name, kind_name, &fields, attrib)?;
                 Ok(json!({"record_id": record.id, "version": record.version}))
             }
             Action::RecordUpdate => {
                 let record = load_live_record(tx, target()?)?;
-                let kind = config
-                    .kind(&record.kind)
-                    .ok_or_else(|| StoreError::Invalid(format!("kind `{}` is no longer in its type", record.kind)))?;
+                let kind = config.kind(&record.kind).ok_or_else(|| {
+                    StoreError::Invalid(format!("kind `{}` is no longer in its type", record.kind))
+                })?;
                 let patch = fields_of(payload);
                 let names: Vec<String> = patch.keys().cloned().collect();
-                recheck(Write { op: Op::Update, kind: Some(&record.kind), settled: false, fields: &names })?;
-                let next = apply_patch(&kind.fields, &record.fields, &patch).map_err(StoreError::Invalid)?;
+                recheck(Write {
+                    op: Op::Update,
+                    kind: Some(&record.kind),
+                    settled: false,
+                    fields: &names,
+                })?;
+                let next = apply_patch(&kind.fields, &record.fields, &patch)
+                    .map_err(StoreError::Invalid)?;
                 validate_refs(tx, &record.type_name, &kind.fields, &next)?;
                 let record = write_record_fields(tx, &record, &next, attrib)?;
                 Ok(json!({"record_id": record.id, "version": record.version}))
@@ -817,9 +991,15 @@ impl Store {
             Action::DocumentCreate => {
                 let patch = fields_of(payload);
                 let names: Vec<String> = patch.keys().cloned().collect();
-                recheck(Write { op: Op::Update, kind: None, settled: false, fields: &names })?;
+                recheck(Write {
+                    op: Op::Update,
+                    kind: None,
+                    settled: false,
+                    fields: &names,
+                })?;
                 let title = validate_title(payload["title"].as_str().unwrap_or_default())?;
-                let fields = apply_patch(&config.document.fields, &Map::new(), &patch).map_err(StoreError::Invalid)?;
+                let fields = apply_patch(&config.document.fields, &Map::new(), &patch)
+                    .map_err(StoreError::Invalid)?;
                 let id = insert_document(tx, &approval.type_name, &title, &fields, attrib)?;
                 Ok(json!({"document_id": id, "version": 1}))
             }
@@ -828,12 +1008,18 @@ impl Store {
                 let document = load_document(tx, id)?.ok_or(StoreError::NotFound)?;
                 let patch = fields_of(payload);
                 let names: Vec<String> = patch.keys().cloned().collect();
-                recheck(Write { op: Op::Update, kind: None, settled: false, fields: &names })?;
+                recheck(Write {
+                    op: Op::Update,
+                    kind: None,
+                    settled: false,
+                    fields: &names,
+                })?;
                 let title = match payload.get("title").and_then(Value::as_str) {
                     Some(title) => validate_title(title)?,
                     None => document.title.clone(),
                 };
-                let fields = apply_patch(&config.document.fields, &document.fields, &patch).map_err(StoreError::Invalid)?;
+                let fields = apply_patch(&config.document.fields, &document.fields, &patch)
+                    .map_err(StoreError::Invalid)?;
                 let version = write_document_fields(tx, id, &title, &fields, attrib)?;
                 Ok(json!({"document_id": id, "version": version}))
             }
@@ -899,7 +1085,11 @@ fn record_from_row(row: &Row<'_>) -> rusqlite::Result<Record> {
 
 fn load_record(connection: &Connection, id: &str) -> Result<Option<Record>, StoreError> {
     connection
-        .query_row(&format!("{RECORD_SELECT} WHERE r.id=?1"), params![id], record_from_row)
+        .query_row(
+            &format!("{RECORD_SELECT} WHERE r.id=?1"),
+            params![id],
+            record_from_row,
+        )
         .optional()
         .map_err(internal)
 }
@@ -944,13 +1134,18 @@ fn load_document(connection: &Connection, id: &str) -> Result<Option<Document>, 
         .prepare("SELECT section, record_id FROM document_items WHERE document_id=?1 ORDER BY section, position")
         .map_err(internal)?;
     let rows = statement
-        .query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .query_map(params![id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
         .map_err(internal)?;
     for row in rows {
         let (section, record_id) = row.map_err(internal)?;
         match document.sections.iter_mut().find(|s| s.name == section) {
             Some(s) => s.record_ids.push(record_id),
-            None => document.sections.push(Section { name: section, record_ids: vec![record_id] }),
+            None => document.sections.push(Section {
+                name: section,
+                record_ids: vec![record_id],
+            }),
         }
     }
     Ok(Some(document))
@@ -991,7 +1186,11 @@ fn approval_from_row(row: &Row<'_>) -> rusqlite::Result<Approval> {
 
 fn load_approval(connection: &Connection, id: &str) -> Result<Option<Approval>, StoreError> {
     connection
-        .query_row(&format!("{APPROVAL_SELECT} WHERE id=?1"), params![id], approval_from_row)
+        .query_row(
+            &format!("{APPROVAL_SELECT} WHERE id=?1"),
+            params![id],
+            approval_from_row,
+        )
         .optional()
         .map_err(internal)
 }
@@ -1015,7 +1214,12 @@ fn hydrate_approval(connection: &Connection, approval: &mut Approval) -> Result<
     Ok(())
 }
 
-fn base_snapshot(connection: &Connection, target_kind: &str, id: &str, version: i64) -> Result<Option<Value>, StoreError> {
+fn base_snapshot(
+    connection: &Connection,
+    target_kind: &str,
+    id: &str,
+    version: i64,
+) -> Result<Option<Value>, StoreError> {
     connection
         .query_row(
             "SELECT snapshot_json FROM revisions WHERE target_kind=?1 AND target_id=?2 AND version<=?3 ORDER BY version DESC LIMIT 1",
@@ -1049,9 +1253,9 @@ fn is_stale(connection: &Connection, approval: &Approval) -> Result<bool, StoreE
             let Some(snapshot) = base_snapshot(connection, "record", target, base)? else {
                 return Ok(true);
             };
-            Ok(touched
-                .iter()
-                .any(|name| snapshot["fields"].get(name.as_str()) != record.fields.get(name.as_str())))
+            Ok(touched.iter().any(|name| {
+                snapshot["fields"].get(name.as_str()) != record.fields.get(name.as_str())
+            }))
         }
         Action::DocumentUpdate | Action::DocumentSelect => {
             let Some(document) = load_document(connection, target)? else {
@@ -1072,11 +1276,12 @@ fn is_stale(connection: &Connection, approval: &Approval) -> Result<bool, StoreE
                     .unwrap_or(json!([]));
                 return Ok(before != json!(section_ids(&document, section)));
             }
-            let title_changed = approval.payload.get("title").is_some() && snapshot["title"] != json!(document.title);
+            let title_changed = approval.payload.get("title").is_some()
+                && snapshot["title"] != json!(document.title);
             Ok(title_changed
-                || touched
-                    .iter()
-                    .any(|name| snapshot["fields"].get(name.as_str()) != document.fields.get(name.as_str())))
+                || touched.iter().any(|name| {
+                    snapshot["fields"].get(name.as_str()) != document.fields.get(name.as_str())
+                }))
         }
         _ => Ok(false),
     }
@@ -1115,7 +1320,10 @@ fn check_edit(approval: &Approval, edit: &Value) -> Result<(), StoreError> {
         let Some(fields) = fields.as_object() else {
             return invalid("fields must be an object");
         };
-        if fields.keys().any(|k| original_fields.is_none_or(|o| !o.contains_key(k))) {
+        if fields
+            .keys()
+            .any(|k| original_fields.is_none_or(|o| !o.contains_key(k)))
+        {
             return invalid("the edit touches a field the card did not");
         }
     }
@@ -1168,7 +1376,13 @@ fn write_revision(
     Ok(())
 }
 
-fn insert_record(connection: &Connection, type_name: &str, kind: &str, fields: &Map<String, Value>, attrib: Attrib<'_>) -> Result<Record, StoreError> {
+fn insert_record(
+    connection: &Connection,
+    type_name: &str,
+    kind: &str,
+    fields: &Map<String, Value>,
+    attrib: Attrib<'_>,
+) -> Result<Record, StoreError> {
     let id = Uuid::new_v4().to_string();
     let now = now_utc();
     connection
@@ -1178,12 +1392,25 @@ fn insert_record(connection: &Connection, type_name: &str, kind: &str, fields: &
         )
         .map_err(internal)?;
     let record = load_live_record(connection, &id)?;
-    write_revision(connection, "record", &id, 1, attrib, "create", &record_snapshot(&record))?;
+    write_revision(
+        connection,
+        "record",
+        &id,
+        1,
+        attrib,
+        "create",
+        &record_snapshot(&record),
+    )?;
     load_live_record(connection, &id)
 }
 
 /// Any content change clears `reviewed`: the person reviewed the old text.
-fn write_record_fields(connection: &Connection, record: &Record, fields: &Map<String, Value>, attrib: Attrib<'_>) -> Result<Record, StoreError> {
+fn write_record_fields(
+    connection: &Connection,
+    record: &Record,
+    fields: &Map<String, Value>,
+    attrib: Attrib<'_>,
+) -> Result<Record, StoreError> {
     connection
         .execute(
             "UPDATE records SET fields_json=?2, reviewed=0, reviewed_at=NULL, version=version+1, updated_at=?3 WHERE id=?1",
@@ -1191,11 +1418,25 @@ fn write_record_fields(connection: &Connection, record: &Record, fields: &Map<St
         )
         .map_err(internal)?;
     let next = load_live_record(connection, &record.id)?;
-    write_revision(connection, "record", &record.id, next.version, attrib, "update", &record_snapshot(&next))?;
+    write_revision(
+        connection,
+        "record",
+        &record.id,
+        next.version,
+        attrib,
+        "update",
+        &record_snapshot(&next),
+    )?;
     load_live_record(connection, &record.id)
 }
 
-fn insert_document(connection: &Connection, type_name: &str, title: &str, fields: &Map<String, Value>, attrib: Attrib<'_>) -> Result<String, StoreError> {
+fn insert_document(
+    connection: &Connection,
+    type_name: &str,
+    title: &str,
+    fields: &Map<String, Value>,
+    attrib: Attrib<'_>,
+) -> Result<String, StoreError> {
     let id = Uuid::new_v4().to_string();
     let now = now_utc();
     connection
@@ -1205,11 +1446,25 @@ fn insert_document(connection: &Connection, type_name: &str, title: &str, fields
         )
         .map_err(internal)?;
     let document = load_document(connection, &id)?.ok_or(StoreError::NotFound)?;
-    write_revision(connection, "document", &id, 1, attrib, "create", &document_snapshot(&document))?;
+    write_revision(
+        connection,
+        "document",
+        &id,
+        1,
+        attrib,
+        "create",
+        &document_snapshot(&document),
+    )?;
     Ok(id)
 }
 
-fn write_document_fields(connection: &Connection, id: &str, title: &str, fields: &Map<String, Value>, attrib: Attrib<'_>) -> Result<i64, StoreError> {
+fn write_document_fields(
+    connection: &Connection,
+    id: &str,
+    title: &str,
+    fields: &Map<String, Value>,
+    attrib: Attrib<'_>,
+) -> Result<i64, StoreError> {
     connection
         .execute(
             "UPDATE documents SET title=?2, fields_json=?3, version=version+1, updated_at=?4 WHERE id=?1",
@@ -1217,13 +1472,30 @@ fn write_document_fields(connection: &Connection, id: &str, title: &str, fields:
         )
         .map_err(internal)?;
     let document = load_document(connection, id)?.ok_or(StoreError::NotFound)?;
-    write_revision(connection, "document", id, document.version, attrib, "update", &document_snapshot(&document))?;
+    write_revision(
+        connection,
+        "document",
+        id,
+        document.version,
+        attrib,
+        "update",
+        &document_snapshot(&document),
+    )?;
     Ok(document.version)
 }
 
-fn write_section(connection: &Connection, id: &str, section: &str, record_ids: &[String], attrib: Attrib<'_>) -> Result<i64, StoreError> {
+fn write_section(
+    connection: &Connection,
+    id: &str,
+    section: &str,
+    record_ids: &[String],
+    attrib: Attrib<'_>,
+) -> Result<i64, StoreError> {
     connection
-        .execute("DELETE FROM document_items WHERE document_id=?1 AND section=?2", params![id, section])
+        .execute(
+            "DELETE FROM document_items WHERE document_id=?1 AND section=?2",
+            params![id, section],
+        )
         .map_err(internal)?;
     for (position, record_id) in record_ids.iter().enumerate() {
         connection
@@ -1240,7 +1512,15 @@ fn write_section(connection: &Connection, id: &str, section: &str, record_ids: &
         )
         .map_err(internal)?;
     let document = load_document(connection, id)?.ok_or(StoreError::NotFound)?;
-    write_revision(connection, "document", id, document.version, attrib, &format!("select:{section}"), &document_snapshot(&document))?;
+    write_revision(
+        connection,
+        "document",
+        id,
+        document.version,
+        attrib,
+        &format!("select:{section}"),
+        &document_snapshot(&document),
+    )?;
     Ok(document.version)
 }
 
@@ -1288,7 +1568,9 @@ fn open_card(
 
 fn validate_note(note: &str) -> Result<(), StoreError> {
     if note.chars().count() > MAX_NOTE {
-        return Err(StoreError::Invalid(format!("notes are limited to {MAX_NOTE} characters")));
+        return Err(StoreError::Invalid(format!(
+            "notes are limited to {MAX_NOTE} characters"
+        )));
     }
     Ok(())
 }
@@ -1296,7 +1578,9 @@ fn validate_note(note: &str) -> Result<(), StoreError> {
 fn validate_title(title: &str) -> Result<String, StoreError> {
     let title = title.trim();
     if title.is_empty() || title.chars().count() > 200 || title.contains('\n') {
-        return Err(StoreError::Invalid("a title is one line of 1 to 200 characters".into()));
+        return Err(StoreError::Invalid(
+            "a title is one line of 1 to 200 characters".into(),
+        ));
     }
     Ok(title.to_string())
 }
@@ -1339,11 +1623,15 @@ fn validate_selection(
         .section(section)
         .ok_or_else(|| StoreError::Invalid(format!("unknown section `{section}`")))?;
     if ids.len() > MAX_SELECTION {
-        return Err(StoreError::Invalid(format!("a section holds at most {MAX_SELECTION} records")));
+        return Err(StoreError::Invalid(format!(
+            "a section holds at most {MAX_SELECTION} records"
+        )));
     }
     for (i, id) in ids.iter().enumerate() {
         if ids[..i].contains(id) {
-            return Err(StoreError::Invalid(format!("record {id} is selected twice")));
+            return Err(StoreError::Invalid(format!(
+                "record {id} is selected twice"
+            )));
         }
         let record = load_record(connection, id)?
             .filter(|r| !r.deleted)
@@ -1365,12 +1653,16 @@ fn validate_selection(
     Ok(())
 }
 
-fn accepted_rows(connection: &Connection) -> Result<HashMap<String, (String, String, String)>, StoreError> {
+fn accepted_rows(
+    connection: &Connection,
+) -> Result<HashMap<String, (String, String, String)>, StoreError> {
     let mut statement = connection
         .prepare("SELECT name, accepted_hash, accepted_body, accepted_at FROM type_configs")
         .map_err(internal)?;
     statement
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))
+        })
         .map_err(internal)?
         .collect::<rusqlite::Result<HashMap<_, _>>>()
         .map_err(internal)
