@@ -230,6 +230,52 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
                     }
                 }
             }
+            Lint::Reviewed {
+                kind,
+                level,
+                message,
+            } => {
+                for record in of_kind(kind) {
+                    if !record.reviewed {
+                        let whose = record_label(resolved, record);
+                        let text = message.clone().unwrap_or_else(|| "not reviewed yet".into());
+                        findings.push(finding(
+                            *level,
+                            format!("{whose}: {text}"),
+                            Some(record),
+                            None,
+                        ));
+                    }
+                }
+            }
+            Lint::Unique {
+                kind,
+                field,
+                level,
+                message,
+            } => {
+                let mut seen: Vec<(String, &Record)> = Vec::new();
+                for record in of_kind(kind) {
+                    let Some(value) = record.fields.get(field) else {
+                        continue;
+                    };
+                    let key = value.to_string();
+                    if let Some((_, first)) = seen.iter().find(|(k, _)| *k == key) {
+                        let text = message.clone().unwrap_or_else(|| {
+                            format!("shares its {field} with {}", record_label(resolved, first))
+                        });
+                        let whose = record_label(resolved, record);
+                        findings.push(finding(
+                            *level,
+                            format!("{whose}: {text}"),
+                            Some(record),
+                            Some(field),
+                        ));
+                    } else {
+                        seen.push((key, record));
+                    }
+                }
+            }
             Lint::MaxItems {
                 section,
                 max,

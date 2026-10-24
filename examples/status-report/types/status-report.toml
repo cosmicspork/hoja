@@ -76,7 +76,7 @@ message = "write the summary before approving"
 
 [[lints]]
 rule = "forbid"
-pattern = "[—–]"
+pattern = "[\u2014\u2013]"
 message = "no em or en dashes"
 
 [[lints]]

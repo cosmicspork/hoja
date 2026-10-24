@@ -859,3 +859,88 @@ fn newer_schemas_are_rejected() {
     drop(connection);
     assert!(Store::init(&path).is_err());
 }
+
+#[test]
+fn reviewed_and_unique_lints() {
+    let f = Fixture::new();
+    let body = format!(
+        "{RESUME}\n[kinds.bullet.fields.claim]\ntype = \"string\"\n\n[[lints]]\nrule = \"reviewed\"\nkind = \"bullet\"\n\n[[lints]]\nrule = \"unique\"\nkind = \"bullet\"\nfield = \"claim\"\n"
+    );
+    std::fs::write(f.root.join("types/resume.toml"), body).unwrap();
+    let files = f.files();
+    let hash = files
+        .iter()
+        .find(|t| t.name == "resume")
+        .unwrap()
+        .hash
+        .clone();
+    f.store
+        .accept_type(&Actor::Person, "resume", &hash, &files)
+        .unwrap();
+
+    let a = applied(
+        create(
+            &f.store,
+            &Actor::Person,
+            "resume",
+            "bullet",
+            json!({"text": "Led it", "claim": "migration"}),
+        )
+        .unwrap(),
+    );
+    let b = applied(
+        create(
+            &f.store,
+            &Actor::Person,
+            "resume",
+            "bullet",
+            json!({"text": "Ran it", "claim": "migration"}),
+        )
+        .unwrap(),
+    );
+    let a = f
+        .store
+        .set_reviewed(&Actor::Person, &a.id, a.version, true)
+        .unwrap();
+    let doc = applied(
+        f.store
+            .create_document(
+                &Actor::Person,
+                CreateDocument {
+                    type_name: "resume".into(),
+                    title: "Acme".into(),
+                    fields: Map::new(),
+                    note: String::new(),
+                },
+            )
+            .unwrap(),
+    );
+    let ids = vec![a.id.clone(), b.id.clone()];
+    applied(
+        f.store
+            .select(
+                &Actor::Person,
+                &doc.id,
+                "experience",
+                SelectSection {
+                    version: doc.version,
+                    record_ids: ids,
+                    note: String::new(),
+                },
+            )
+            .unwrap(),
+    );
+    let findings = lint::lint(&f.store.resolve(&doc.id).unwrap());
+    let messages: Vec<&str> = findings.iter().map(|x| x.message.as_str()).collect();
+    assert_eq!(findings.len(), 2, "{messages:?}");
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("\"Ran it\": not reviewed"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("shares its claim with bullet \"Led it\""))
+    );
+}

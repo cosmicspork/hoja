@@ -1,0 +1,12 @@
+[Unit]
+Description=hoja: structured documents with agents, safely
+Requires=hoja.socket
+After=hoja.socket
+
+[Service]
+# hoja takes the listening socket from systemd (LISTEN_FDS) and binds
+# --port itself only when started by hand. Point HOJA_WORKSPACE at yours.
+Environment=HOJA_WORKSPACE=%h/hoja
+Environment=PATH=%h/.cargo/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.cargo/bin/hoja serve
+Restart=on-failure

@@ -1,0 +1,11 @@
+# Socket activation: hoja starts the first time its port is opened.
+# Install both units into ~/.config/systemd/user/, set the workspace in
+# hoja.service, then: systemctl --user enable --now hoja.socket
+[Unit]
+Description=hoja (socket)
+
+[Socket]
+ListenStream=127.0.0.1:4520
+
+[Install]
+WantedBy=sockets.target

@@ -185,6 +185,24 @@ pub enum Lint {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// Every selected record of `kind` is marked reviewed by the person.
+    Reviewed {
+        kind: String,
+        #[serde(default)]
+        level: Level,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    /// No two selected records of `kind` share a value of `field`, e.g. one
+    /// bullet per accomplishment when several are written different ways.
+    Unique {
+        kind: String,
+        field: String,
+        #[serde(default)]
+        level: Level,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,6 +402,17 @@ impl TypeConfig {
                 if self.section(section).is_none() {
                     bail!("lint names unknown section `{section}`");
                 }
+            }
+            Lint::Reviewed { kind, .. } => {
+                if self.kind(kind).is_none() {
+                    bail!("lint names unknown kind `{kind}`");
+                }
+            }
+            Lint::Unique { kind, field, .. } => {
+                if kind == DOCUMENT_KIND {
+                    bail!("unique applies to record kinds");
+                }
+                field_of(kind, field)?;
             }
         }
         Ok(())
