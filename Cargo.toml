@@ -1,0 +1,26 @@
+[package]
+name = "hoja"
+version = "0.1.0"
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+indexmap = { version = "2", features = ["serde"] }
+listenfd = "1"
+mime_guess = "2"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "sync", "process"] }
+toml = { version = "0.9", features = ["preserve_order"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }

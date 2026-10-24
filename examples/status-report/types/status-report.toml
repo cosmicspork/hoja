@@ -1,0 +1,87 @@
+# A monthly project status report. An agent gathers the items (through
+# Tracon, which holds the forge and Jira credentials); the person reviews,
+# writes the summary, and approves.
+title = "Monthly status report"
+first_draft = "agent"
+template = "status-report.typ"
+filename = "{owner}_Status_{doc.period}"
+exports = ["pdf", "md", "html"]
+
+[kinds.item]
+title = "Item"
+label = "text"
+
+[kinds.item.fields.text]
+type = "text"
+required = true
+help = "One sentence: what changed, in plain words."
+
+[kinds.item.fields.status]
+type = "enum"
+options = ["done", "in_progress", "next"]
+required = true
+
+[kinds.item.fields.project]
+type = "string"
+
+[kinds.item.fields.refs]
+type = "list"
+title = "References"
+help = "Commit SHAs, merge requests (!123) or Jira keys (ABC-123)."
+
+[document.fields.period]
+type = "string"
+required = true
+help = "The month covered, e.g. 2026-10."
+
+[document.fields.summary]
+type = "text"
+person_only = true
+help = "Two or three sentences in your own words."
+
+[[document.sections]]
+name = "done"
+title = "Done"
+kind = "item"
+where = { status = "done" }
+item = "{text} ({refs})"
+
+[[document.sections]]
+name = "in_progress"
+title = "In progress"
+kind = "item"
+where = { status = "in_progress" }
+item = "{text} ({refs})"
+
+[[document.sections]]
+name = "next"
+title = "Next"
+kind = "item"
+where = { status = "next" }
+item = "{text} ({refs})"
+
+[[lints]]
+rule = "match"
+kind = "item"
+field = "refs"
+pattern = '^([0-9a-f]{7,40}|![0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$'
+min = 1
+message = "every item cites a commit, merge request or Jira key"
+
+[[lints]]
+rule = "require"
+kind = "document"
+field = "summary"
+message = "write the summary before approving"
+
+[[lints]]
+rule = "forbid"
+pattern = "[—–]"
+message = "no em or en dashes"
+
+[[lints]]
+rule = "max_words"
+kind = "item"
+field = "text"
+max = 30
+level = "warn"

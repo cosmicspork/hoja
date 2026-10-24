@@ -1,0 +1,6 @@
+{"type":"status-report","kind":"item","fields":{"text":"Shipped offline sync for the field inspection app","status":"done","project":"Inspections","refs":["a41c9e2","!218"]}}
+{"type":"status-report","kind":"item","fields":{"text":"Cut median report export time from 9 seconds to 2 by batching photo uploads","status":"done","project":"Inspections","refs":["INSP-412"]}}
+{"type":"status-report","kind":"item","fields":{"text":"Retired the legacy permit lookup endpoint after two weeks of zero traffic","status":"done","project":"Permits","refs":["PERM-77","!231"]}}
+{"type":"status-report","kind":"item","fields":{"text":"Moving the permit fee calculator to the shared rules library","status":"in_progress","project":"Permits","refs":["PERM-81"]}}
+{"type":"status-report","kind":"item","fields":{"text":"Accessibility pass on the inspector dashboard","status":"in_progress","project":"Inspections","refs":["INSP-430"]}}
+{"type":"status-report","kind":"item","fields":{"text":"Pilot photo redaction with two county offices","status":"next","project":"Inspections","refs":["INSP-441"]}}
