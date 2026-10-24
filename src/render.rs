@@ -205,10 +205,14 @@ fn outline(resolved: &Resolved) -> Outline {
         .iter()
         .filter_map(|(name, field)| {
             let value = resolved.document.fields.get(name).map(display)?;
-            let title = field
-                .title
-                .clone()
-                .unwrap_or_else(|| name.replace('_', " "));
+            let title = field.title.clone().unwrap_or_else(|| {
+                let spaced = name.replace('_', " ");
+                let mut chars = spaced.chars();
+                chars
+                    .next()
+                    .map(|c| c.to_uppercase().chain(chars).collect())
+                    .unwrap_or_default()
+            });
             Some((title, value, field.ty == FieldType::Text))
         })
         .collect();

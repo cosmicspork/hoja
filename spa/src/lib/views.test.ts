@@ -1,0 +1,78 @@
+import { describe, expect, test } from 'bun:test';
+import type { FieldConfig, HojaRecord, SectionConfig } from './api';
+import { collapse, eligible, fieldChanges, fromForm, href, lineDiff, move, parseRoute, patch, toForm } from './views';
+
+const text: FieldConfig = { type: 'text', required: false, person_only: false };
+const tags: FieldConfig = { type: 'tags', required: false, person_only: false };
+const list: FieldConfig = { type: 'list', required: false, person_only: false };
+const flag: FieldConfig = { type: 'bool', required: false, person_only: false };
+
+function record(id: string, kind: string, fields: HojaRecord['fields'], deleted = false): HojaRecord {
+  return { id, type: 't', kind, fields, reviewed: false, reviewed_at: null, version: 1, created_at: '', updated_at: '', deleted, created_by: null, updated_by: null };
+}
+
+describe('form values', () => {
+  test('round-trip lists, tags and booleans', () => {
+    expect(toForm(list, ['a, b', 'c'])).toBe('a, b\nc');
+    expect(fromForm(list, 'a, b\n\nc ')).toEqual(['a, b', 'c']);
+    expect(fromForm(tags, 'rust, go\nsql')).toEqual(['rust', 'go', 'sql']);
+    expect(fromForm(text, '   ')).toBeNull();
+    expect(fromForm(flag, false)).toBeNull();
+    expect(fromForm(flag, true)).toBe(true);
+  });
+
+  test('patch carries only changed fields, with null to clear', () => {
+    const fields = { text, tags };
+    const current = { text: 'Hello', tags: ['a'] };
+    expect(patch(fields, current, { text: 'Hello', tags: 'a' })).toEqual({});
+    expect(patch(fields, current, { text: 'Hi', tags: '' })).toEqual({ text: 'Hi', tags: null });
+  });
+});
+
+test('fieldChanges skips unchanged values', () => {
+  expect(fieldChanges({ a: 'x', b: 'y' }, { a: 'x', b: 'z', c: null })).toEqual([{ name: 'b', before: 'y', after: 'z' }]);
+});
+
+test('eligible respects kind, where filters and deletion', () => {
+  const section: SectionConfig = { name: 'done', kind: 'item', where: { status: 'done' } };
+  const records = [
+    record('1', 'item', { status: 'done' }),
+    record('2', 'item', { status: 'next' }),
+    record('3', 'note', { status: 'done' }),
+    record('4', 'item', { status: 'done' }, true)
+  ];
+  expect(eligible(records, section).map(r => r.id)).toEqual(['1']);
+});
+
+test('move swaps neighbours and ignores out-of-range moves', () => {
+  expect(move(['a', 'b', 'c'], 1, -1)).toEqual(['b', 'a', 'c']);
+  expect(move(['a', 'b'], 0, -1)).toEqual(['a', 'b']);
+});
+
+test('lineDiff marks additions and removals', () => {
+  expect(lineDiff('a\nb\nc', 'a\nc\nd')).toEqual([
+    { kind: 'same', text: 'a' },
+    { kind: 'remove', text: 'b' },
+    { kind: 'same', text: 'c' },
+    { kind: 'add', text: 'd' }
+  ]);
+});
+
+test('routes round-trip through the hash', () => {
+  for (const route of [
+    { view: 'documents' as const },
+    { view: 'document' as const, id: 'abc' },
+    { view: 'records' as const, type: 'status-report', kind: 'item', id: 'x/y' },
+    { view: 'approvals' as const },
+    { view: 'types' as const }
+  ]) {
+    expect(parseRoute(href(route))).toEqual(route);
+  }
+  expect(parseRoute('#/nonsense')).toEqual({ view: 'documents' });
+});
+
+test('collapse folds unchanged runs outside the context', () => {
+  const lines = lineDiff('1\n2\n3\n4\n5\n6', '1\n2\n3\n4\n5\nsix');
+  expect(collapse(lines, 1).map(l => l.kind)).toEqual(['skip', 'same', 'remove', 'add']);
+  expect(collapse(lines, 1)[0].text).toBe('4 unchanged lines');
+});

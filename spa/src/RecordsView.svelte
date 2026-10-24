@@ -1,0 +1,170 @@
+<script lang="ts">
+  import FieldInput from './FieldInput.svelte';
+  import Revisions from './Revisions.svelte';
+  import { api, message, type HojaRecord, type Revision, type TypeConfig } from './lib/api';
+  import { authorText, filterRecords, formOf, href, patch, recordLabel, titleOf, when } from './lib/views';
+
+  let { typeName, kind, config, selectedId, onchange }: {
+    typeName: string;
+    kind: string;
+    config: TypeConfig;
+    selectedId?: string;
+    onchange: () => void;
+  } = $props();
+
+  const kindConfig = $derived(config.kinds[kind]);
+  let all = $state<HojaRecord[]>([]);
+  let query = $state('');
+  let error = $state('');
+  let busy = $state(false);
+  let current = $state<HojaRecord | null>(null);
+  let revisions = $state<Revision[]>([]);
+  let form = $state<Record<string, string | boolean>>({});
+  let creating = $state(false);
+
+  const records = $derived(filterRecords(all.filter(r => r.kind === kind), query));
+  const dirty = $derived(kindConfig && (creating || current) ? Object.keys(patch(kindConfig.fields, current?.fields ?? {}, form)).length > 0 : false);
+
+  async function load() {
+    try {
+      all = await api.records(typeName);
+      error = '';
+    } catch (e) { error = message(e, 'Could not load records.'); }
+  }
+
+  async function open(id: string | undefined) {
+    creating = false;
+    if (!id) { current = null; revisions = []; return; }
+    try {
+      const view = await api.record(id);
+      current = view.record;
+      revisions = view.revisions;
+      form = formOf(kindConfig.fields, current.fields);
+      error = '';
+    } catch (e) { error = message(e, 'Could not load the record.'); }
+  }
+
+  function startNew() {
+    current = null;
+    revisions = [];
+    creating = true;
+    form = formOf(kindConfig.fields, {});
+    location.hash = href({ view: 'records', type: typeName, kind });
+  }
+
+  async function act(operation: () => Promise<void>) {
+    busy = true;
+    error = '';
+    try {
+      await operation();
+      await load();
+      onchange();
+    } catch (e) {
+      error = message(e, 'That did not work.');
+    } finally { busy = false; }
+  }
+
+  function save(event: SubmitEvent) {
+    event.preventDefault();
+    act(async () => {
+      if (creating) {
+        const record = await api.createRecord(typeName, kind, patch(kindConfig.fields, {}, form));
+        creating = false;
+        location.hash = href({ view: 'records', type: typeName, kind, id: record.id });
+      } else if (current) {
+        await api.updateRecord(current.id, current.version, patch(kindConfig.fields, current.fields, form));
+        await open(current.id);
+      }
+    });
+  }
+
+  function toggleReviewed() {
+    if (!current) return;
+    const record = current;
+    act(async () => { await api.setReviewed(record.id, record.version, !record.reviewed); await open(record.id); });
+  }
+
+  function remove() {
+    if (!current) return;
+    const record = current;
+    act(async () => {
+      await api.deleteRecord(record.id, record.version);
+      location.hash = href({ view: 'records', type: typeName, kind });
+    });
+  }
+
+  $effect(() => { void typeName; load(); });
+  $effect(() => { void kind; open(selectedId); });
+</script>
+
+<header class="page-head">
+  <div>
+    <p class="eyebrow">{titleOf(typeName, config)}</p>
+    <h1>{titleOf(kind, kindConfig)}</h1>
+  </div>
+  <div class="actions">
+    {#if config.first_draft === 'human'}<span class="hint">First drafts are yours; agents can only suggest changes.</span>{/if}
+    <button class="primary" onclick={startNew}>New {titleOf(kind, kindConfig).toLowerCase()}</button>
+  </div>
+</header>
+
+{#if error}<p class="error" role="alert">{error}</p>{/if}
+
+<div class="split">
+  <section class="list-pane">
+    <input class="search" type="search" placeholder="Search" bind:value={query} />
+    {#if records.length === 0}
+      <p class="empty">No {titleOf(kind, kindConfig).toLowerCase()} records yet.</p>
+    {/if}
+    <ul class="record-list">
+      {#each records as record (record.id)}
+        <li>
+          <a href={href({ view: 'records', type: typeName, kind, id: record.id })} class:active={record.id === current?.id}>
+            <span class="label">{recordLabel(config, record)}</span>
+            <span class="meta">
+              {#if record.reviewed}<span class="badge ok">reviewed</span>{/if}
+              <span class="badge author {record.created_by?.author}">{authorText(record.created_by)}</span>
+              {#each (record.fields.tags as string[] | undefined) ?? [] as tag (tag)}<span class="tag">{tag}</span>{/each}
+            </span>
+          </a>
+        </li>
+      {/each}
+    </ul>
+  </section>
+
+  <section class="detail-pane">
+    {#if creating || current}
+      <form class="card form" onsubmit={save}>
+        <div class="form-head">
+          <h2>{creating ? `New ${titleOf(kind, kindConfig).toLowerCase()}` : recordLabel(config, current!)}</h2>
+          {#if current}
+            <div class="status-line">
+              {#if current.reviewed}<span class="badge ok">reviewed {when(current.reviewed_at)}</span>{:else}<span class="badge">not reviewed</span>{/if}
+              <span class="muted">v{current.version} · first draft by {authorText(current.created_by)} · last change by {authorText(current.updated_by)}</span>
+            </div>
+          {/if}
+        </div>
+        <div class="fields">
+          {#each Object.entries(kindConfig.fields) as [name, field] (name)}
+            <FieldInput {name} {field} {config} records={all} bind:value={form[name]} disabled={busy} />
+          {/each}
+        </div>
+        <div class="form-actions">
+          <button class="primary" type="submit" disabled={busy || !dirty}>{creating ? 'Create' : 'Save'}</button>
+          {#if current}
+            <button type="button" onclick={toggleReviewed} disabled={busy || dirty} title={dirty ? 'Save first' : ''}>
+              {current.reviewed ? 'Mark not reviewed' : 'Mark reviewed'}
+            </button>
+            <button type="button" class="danger" onclick={remove} disabled={busy}>Delete</button>
+          {/if}
+          {#if current && dirty}<span class="hint">Saving clears the reviewed mark.</span>{/if}
+        </div>
+      </form>
+      {#if current}
+        <Revisions {revisions} />
+      {/if}
+    {:else}
+      <p class="empty">Pick a record, or create one. Fields: {Object.keys(kindConfig.fields).map(n => titleOf(n, kindConfig.fields[n])).join(', ')}.</p>
+    {/if}
+  </section>
+</div>
