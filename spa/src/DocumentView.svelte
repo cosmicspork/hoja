@@ -3,10 +3,15 @@
   import FieldInput from './FieldInput.svelte';
   import Provenance from './Provenance.svelte';
   import Revisions from './Revisions.svelte';
-  import { ApiError, api, message, type DocumentView, type Format, type HojaRecord, type TypeConfig } from './lib/api';
+  import { ApiError, api, message, type DocumentView, type Format, type HojaRecord, type SectionConfig, type TypeConfig } from './lib/api';
   import { eligible, formOf, href, move, patch, recordLabel, titleOf, when } from './lib/views';
 
-  let { id, config, onchange }: { id: string; config: TypeConfig; onchange: () => void } = $props();
+  let { id, config, configs, onchange }: { id: string; config: TypeConfig; configs: Record<string, TypeConfig>; onchange: () => void } = $props();
+
+  // The type a section's records come from, and its config.
+  function sourceType(section: SectionConfig): string { return section.type ?? doc?.type ?? ''; }
+  function sourceConfig(section: SectionConfig): TypeConfig | undefined { return configs[sourceType(section)]; }
+  function labelOf(record: HojaRecord): string { return recordLabel(configs[record.type] ?? config, record); }
 
   let view = $state<DocumentView | null>(null);
   let records = $state<HojaRecord[]>([]);
@@ -36,7 +41,8 @@
     try {
       const [next, all] = await Promise.all([api.document(id), api.records(undefined)]);
       view = next;
-      records = all.filter(r => r.type === next.document.type);
+      const types = new Set([next.document.type, ...config.document.sections.map(s => s.type).filter(Boolean)]);
+      records = all.filter(r => types.has(r.type));
       title = next.document.title;
       form = formOf(config.document.fields, next.document.fields);
       selection = Object.fromEntries(config.document.sections.map(s => [s.name, [...(next.document.sections.find(x => x.name === s.name)?.record_ids ?? [])]]));
@@ -175,17 +181,18 @@
 
       {#each config.document.sections as section (section.name)}
         {@const chosen = selection[section.name] ?? []}
-        {@const available = eligible(records, section).filter(r => !chosen.includes(r.id))}
+        {@const available = eligible(records, section, doc.type).filter(r => !chosen.includes(r.id))}
+        {@const source = sourceConfig(section)}
         <section class="card section">
           <div class="form-head">
             <h2>{titleOf(section.name, section)}</h2>
-            <span class="muted">{titleOf(section.kind, config.kinds[section.kind])} records{#if section.where}, where {Object.entries(section.where).map(([f, v]) => `${f} is ${v}`).join(' and ')}{/if}</span>
+            <span class="muted">{titleOf(section.kind, source?.kinds[section.kind])} records{#if section.type} from the {titleOf(section.type, source)}{/if}{#if section.where}, where {Object.entries(section.where).map(([f, v]) => `${f} is ${v}`).join(' and ')}{/if}</span>
           </div>
           <ol class="chosen">
             {#each chosen as recordId, index (recordId)}
               {@const record = byId.get(recordId)}
               <li>
-                <span class="label">{record ? recordLabel(config, record) : 'Deleted record'}</span>
+                <span class="label">{record ? labelOf(record) : 'Deleted record'}</span>
                 {#if record && !record.reviewed}<span class="badge">not reviewed</span>{/if}
                 <span class="row-actions">
                   <button type="button" aria-label="Move up" onclick={() => shift(section.name, index, -1)} disabled={index === 0}>↑</button>
@@ -202,7 +209,7 @@
               <summary>Add ({available.length} available)</summary>
               <ul class="available">
                 {#each available as record (record.id)}
-                  <li><button type="button" class="link" onclick={() => add(section.name, record.id)}>+ {recordLabel(config, record)}</button></li>
+                  <li><button type="button" class="link" onclick={() => add(section.name, record.id)}>+ {labelOf(record)}</button></li>
                 {/each}
               </ul>
             </details>
@@ -210,7 +217,7 @@
           <div class="form-actions">
             <button class="primary" onclick={() => saveSection(section.name)} disabled={busy || !sectionDirty(section.name)}>Save selection</button>
             {#if sectionDirty(section.name)}<button type="button" onclick={() => selection[section.name] = [...saved(section.name)]}>Undo</button>{/if}
-            <a class="muted" href={href({ view: 'records', type: doc.type, kind: section.kind })}>Edit {titleOf(section.kind, config.kinds[section.kind]).toLowerCase()} records</a>
+            <a class="muted" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
           </div>
         </section>
       {/each}

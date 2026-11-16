@@ -117,7 +117,8 @@
     <h1>{titleOf(kind, kindConfig)}</h1>
   </div>
   <div class="actions">
-    {#if config.first_draft === 'human'}<span class="hint">First drafts are yours; agents can only suggest changes.</span>{/if}
+    {#if config.first_draft === 'human'}<span class="hint">First drafts are yours; agents can only suggest changes.</span>
+    {:else if kindConfig?.agent_direct === false}<span class="hint">Agents' new and changed {titleOf(kind, kindConfig).toLowerCase()} records come to you as cards.</span>{/if}
     <button class="primary" onclick={startNew}>New {titleOf(kind, kindConfig).toLowerCase()}</button>
   </div>
 </header>

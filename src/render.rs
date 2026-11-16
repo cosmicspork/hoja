@@ -120,7 +120,7 @@ pub fn sample(
         .unwrap_or_else(|| placeholders_for(&config.document.fields, 0));
     let mut sections = Vec::new();
     for (si, section) in config.document.sections.iter().enumerate() {
-        let source = type_name;
+        let source = section.from_type.as_deref().unwrap_or(type_name);
         let kind = configs.get(source).and_then(|c| c.kind(&section.kind));
         let given = sample
             .and_then(|s| s.get("sections"))
@@ -314,18 +314,18 @@ fn display(value: &Value) -> String {
     }
 }
 
-fn label(config: &TypeConfig, record: &Record) -> String {
-    config
-        .kind(&record.kind)
+fn label(resolved: &Resolved, record: &Record) -> String {
+    resolved
+        .kind_config(record)
         .and_then(|k| k.label_field())
         .and_then(|f| record.fields.get(f))
         .map(display)
         .unwrap_or_default()
 }
 
-fn item_line(config: &TypeConfig, pattern: Option<&str>, record: &Record) -> String {
+fn item_line(resolved: &Resolved, pattern: Option<&str>, record: &Record) -> String {
     let Some(pattern) = pattern else {
-        return label(config, record);
+        return label(resolved, record);
     };
     let mut line = pattern.to_string();
     for placeholder in placeholders(pattern) {
@@ -387,10 +387,10 @@ fn outline(resolved: &Resolved) -> Outline {
             let groups = groups(resolved, &section.name)
                 .into_iter()
                 .map(|(target, items)| {
-                    let heading = target.map(|t| label(config, t));
+                    let heading = target.map(|t| label(resolved, t));
                     let lines = items
                         .into_iter()
-                        .map(|r| item_line(config, section.item.as_deref(), r))
+                        .map(|r| item_line(resolved, section.item.as_deref(), r))
                         .collect();
                     (heading, lines)
                 })
@@ -524,6 +524,7 @@ impl Typst {
             .arg(&root)
             .arg(root.join(entry))
             .arg(&output)
+            .current_dir(scratch.path())
             .kill_on_drop(true);
         if self.fonts.is_dir() {
             command.arg("--font-path").arg(&self.fonts);
@@ -534,10 +535,13 @@ impl Typst {
             .map_err(|e| RenderError::Io(format!("running {}: {e}", self.binary.display())))?;
         if !run.status.success() {
             let stderr = String::from_utf8_lossy(&run.stderr);
+            // Typst names files by absolute path or relative to its working
+            // directory (the scratch dir); show both as `templates/...`.
             let root_text = root.display().to_string();
-            return Err(RenderError::Compile(
-                stderr.replace(&root_text, "templates").trim().to_string(),
-            ));
+            let message = stderr
+                .replace(&root_text, "templates")
+                .replace("─ root/", "─ templates/");
+            return Err(RenderError::Compile(message.trim().to_string()));
         }
         std::fs::read(&output).map_err(io)
     }

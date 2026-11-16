@@ -84,6 +84,10 @@ pub struct KindConfig {
     /// The field shown when a record is listed or referenced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Setting this to false sends every agent write to records of this kind
+    /// through a card, even where the type lets agents draft directly.
+    #[serde(default = "yes")]
+    pub agent_direct: bool,
     pub fields: IndexMap<String, FieldConfig>,
 }
 
@@ -104,6 +108,10 @@ pub struct SectionConfig {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Select records of another accepted type (a status report picking
+    /// from the RAID log). Those records keep their own type's gates.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub from_type: Option<String>,
     pub kind: String,
     /// Only records whose fields equal these values may be selected here.
     #[serde(rename = "where", default, skip_serializing_if = "IndexMap::is_empty")]
@@ -260,6 +268,11 @@ impl TypeConfig {
         self.kinds.get(kind)
     }
 
+    /// The type a section's records come from: its `type`, or this one.
+    pub fn section_type<'a>(&self, section: &'a SectionConfig, own: &'a str) -> &'a str {
+        section.from_type.as_deref().unwrap_or(own)
+    }
+
     pub fn section(&self, name: &str) -> Option<&SectionConfig> {
         self.document.sections.iter().find(|s| s.name == name)
     }
@@ -295,6 +308,20 @@ impl TypeConfig {
                 bail!("invalid or duplicate section name `{}`", section.name);
             }
             seen.push(&section.name);
+            if let Some(other) = &section.from_type {
+                // The other type is checked when a record is selected, since
+                // it is accepted separately and may change on its own.
+                if !valid_type_name(other) || !valid_name(&section.kind, '_') {
+                    bail!("section `{}` names an invalid type or kind", section.name);
+                }
+                if section.group_by.is_some() {
+                    bail!(
+                        "section `{}` selects from another type, so it can't group_by",
+                        section.name
+                    );
+                }
+                continue;
+            }
             let kind = self.kinds.get(&section.kind).with_context(|| {
                 format!(
                     "section `{}`: unknown kind `{}`",

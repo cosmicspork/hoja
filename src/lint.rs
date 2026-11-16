@@ -34,8 +34,7 @@ fn finding(
 /// A short name for a record in messages.
 pub fn record_label(resolved: &Resolved, record: &Record) -> String {
     let label = resolved
-        .config
-        .kind(&record.kind)
+        .kind_config(record)
         .and_then(|k| k.label_field())
         .and_then(|f| record.fields.get(f))
         .and_then(Value::as_str)
@@ -65,8 +64,15 @@ pub fn lint(resolved: &Resolved) -> Vec<LintFinding> {
         .filter(|r| seen.insert(r.id.clone()))
         .collect();
     let document_fields: &Map<String, Value> = &resolved.document.fields;
+    // Lints name this type's kinds; records selected from another type
+    // answer to that type's own rules.
+    let own = resolved.document.type_name.as_str();
     let of_kind = |kind: &str| -> Vec<&Record> {
-        records.iter().copied().filter(|r| r.kind == kind).collect()
+        records
+            .iter()
+            .copied()
+            .filter(|r| r.kind == kind && r.type_name == own)
+            .collect()
     };
 
     for lint in &resolved.config.lints {

@@ -1,0 +1,23 @@
+{
+  "title": "Field inspections: RAID log",
+  "fields": {
+    "project": "Field inspections",
+    "as_of": "2026-11-14",
+    "notes": "Two risks moved to **mitigating** this week. The county pilot depends on the redaction service, now *at risk*."
+  },
+  "sections": {
+    "risks": [
+      {"fields": {"key": "R-001", "title": "Offline sync conflicts lose inspector edits", "description": "Because two inspectors can edit the same report offline, the later sync might overwrite the earlier one, which would lose findings.", "likelihood": "medium", "severity": "high", "owner": "Sam Rivera", "status": "mitigating", "mitigation": "Field-level merge shipped in !218.\n\n- Monitor conflict rate weekly\n- Escalate if it passes 1%", "raised": "2026-09-30", "review_by": "2026-12-01", "refs": ["INSP-402"]}},
+      {"fields": {"key": "R-002", "title": "County IT blocks the photo upload domain", "description": "County firewalls block unknown domains by default.", "likelihood": "high", "severity": "medium", "owner": "Priya Nair", "status": "open", "mitigation": "Ask both pilot counties to allowlist the domain before go-live.", "raised": "2026-10-21", "review_by": "2026-11-20", "refs": ["INSP-441"]}}
+    ],
+    "assumptions": [
+      {"fields": {"key": "A-001", "title": "Inspectors have a phone with a camera", "description": "Every county issues one; confirm for the pilot sites.", "owner": "Priya Nair", "status": "unvalidated", "validate_by": "2026-11-30"}}
+    ],
+    "issues": [
+      {"fields": {"key": "I-001", "title": "Report export times out for reports with 200+ photos", "severity": "high", "owner": "Sam Rivera", "status": "in_progress", "resolution": "Batching uploads cut the median from 9 seconds to 2; large reports still slow.", "raised": "2026-10-02", "due": "2026-11-21", "refs": ["INSP-412"]}}
+    ],
+    "dependencies": [
+      {"fields": {"key": "D-001", "title": "Photo redaction service in production", "on": "Platform team", "owner": "Sam Rivera", "status": "at_risk", "needed_by": "2026-12-05", "refs": ["PLAT-77"]}}
+    ]
+  }
+}

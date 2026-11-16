@@ -1,6 +1,7 @@
 # A monthly project status report. An agent gathers the items (through
-# Tracon, which holds the forge and Jira credentials); the person reviews,
-# writes the summary, and approves.
+# Tracon, which holds the forge and Jira credentials) and picks the risks
+# and issues worth reporting from the RAID log; the person reviews, writes
+# the summary, and approves.
 title = "Monthly status report"
 first_draft = "agent"
 template = "status-report.typ"
@@ -59,6 +60,29 @@ title = "Next"
 kind = "item"
 where = { status = "next" }
 item = "{text} ({refs})"
+
+# Selected from the RAID log. The entries stay governed by the raid type:
+# only the person rates them, and editing one returns this report to draft.
+[[document.sections]]
+name = "risks"
+title = "Top risks"
+type = "raid"
+kind = "risk"
+item = "{key} {title} [{severity}] ({status})"
+
+[[document.sections]]
+name = "issues"
+title = "Open issues"
+type = "raid"
+kind = "issue"
+item = "{key} {title} [{severity}] ({status})"
+
+[[lints]]
+rule = "max_items"
+section = "risks"
+max = 5
+level = "warn"
+message = "report the top five risks at most"
 
 [[lints]]
 rule = "match"

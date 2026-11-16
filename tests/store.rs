@@ -39,7 +39,7 @@ kind = "bullet"
 group_by = "role"
 "#;
 
-const REPORT: &str = include_str!("../examples/status-report/types/status-report.toml");
+const REPORT: &str = include_str!("../examples/project/types/status-report.toml");
 
 struct Fixture {
     _dir: tempfile::TempDir,

@@ -4,7 +4,7 @@ A local tool for working safely with agents to build structured documents.
 
 People and agents edit the same records. Every change records who made it. Agents draft where a document type lets them, and otherwise suggest; the person reviews, accepts, and approves. Typst renders the result.
 
-hoja is a generic engine. Document types are local configuration: a monthly project status report ships here as the example, and resumes or anything else live in your own private workspace. It is a companion to [Tracon](https://github.com/cosmicspork/tracon), like [workboard](https://github.com/cosmicspork/workboard): hoja holds no forge or Jira credentials, so an agent gathers facts through Tracon and submits them here through the CLI.
+hoja is a generic engine. Document types are local configuration: a project's charter, RAID log and monthly status report ship here as the example, and resumes or anything else live in your own private workspace. It is a companion to [Tracon](https://github.com/cosmicspork/tracon), like [workboard](https://github.com/cosmicspork/workboard): hoja holds no forge or Jira credentials, so an agent gathers facts through Tracon and submits them here through the CLI.
 
 ## The rules
 
@@ -53,10 +53,18 @@ Requires Rust, Bun, and the [Typst](https://typst.app) CLI on `PATH`.
 bun install --cwd spa
 bun run --cwd spa build
 cargo install --path . --locked
-hoja serve --workspace examples/status-report
+hoja serve --workspace examples/project
 ```
 
-Open `http://localhost:4520/`, accept the type under **Types**, and you have an empty status report workspace. Build the frontend before compiling Rust: the UI is embedded in the binary.
+Open `http://localhost:4520/`, review and accept the types and templates under **Types**, and you have an empty project workspace. Build the frontend before compiling Rust: the UI is embedded in the binary.
+
+The example has three types that work together:
+
+- **Project charter** (`first_draft = "human"`): sectioned prose you write, one Markdown field per section, plus milestone and stakeholder records and the initial risks picked from the RAID log. Agents suggest edits to a section as cards.
+- **RAID log** (`first_draft = "agent"`): risks, assumptions, issues and dependencies. Likelihood, severity, owner and status are yours only. Agents log issues and dependencies directly (unreviewed); their risks and assumptions arrive as cards. You publish the log's PDF rather than approve it; approving snapshots a version you sent out.
+- **Monthly status report** (`first_draft = "agent"`): done, in progress and next items an agent gathers, plus the top risks and open issues selected from the RAID log. Changing a RAID entry the report shows returns the report to draft.
+
+`HOJA_AGENT=claude hoja import examples/project/sample.jsonl` loads status items and RAID entries the way an agent would: the risk comes to you as a card. `samples/*.json` hold invented content for template previews.
 
 `--port` changes the port (default 4520), `--typst` (or `HOJA_TYPST`) picks the Typst binary, and `HOJA_WORKSPACE` can stand in for `--workspace`. Under systemd, `contrib/systemd/` has a socket-activated user service: hoja starts the first time its port is opened.
 
@@ -78,12 +86,12 @@ Keep separate workspaces for separate contexts, such as career records and work 
 
 ### Type files
 
-A type declares record kinds and their fields, the document's own fields, its sections, lints, and how files are named. See [`examples/status-report/types/status-report.toml`](examples/status-report/types/status-report.toml) for a complete one.
+A type declares record kinds and their fields, the document's own fields, its sections, lints, and how files are named. See [`examples/project/types/status-report.toml`](examples/project/types/status-report.toml) for a complete one.
 
-- `first_draft`: `human` or `agent`, as above. `agent_direct = false` tightens an agent type.
+- `first_draft`: `human` or `agent`, as above. `agent_direct = false` tightens an agent type, and `[kinds.<kind>] agent_direct = false` tightens one kind (a RAID log's risks).
 - `[kinds.<kind>.fields.<name>]`: `type` is `string`, `text`, `tags`, `list`, `enum` (with `options`), `date` (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`), `bool`, or `ref` (with `ref_kind`). Fields can be `required` and `person_only`, and carry a `title` and `help`.
 - `[document.fields.<name>]`: the per-document text, such as a summary.
-- `[[document.sections]]`: `name`, `kind`, an optional `where` filter on field values, `group_by` (a ref field; items render grouped under the referenced record), and `item`, the Markdown/HTML line pattern such as `"{text} ({refs})"`. A document selects, orders, and omits records per section; it never edits them.
+- `[[document.sections]]`: `name`, `kind`, an optional `type` to select records of another accepted type (a status report picking from the RAID log), an optional `where` filter on field values, `group_by` (a ref field of this type; items render grouped under the referenced record), and `item`, the Markdown/HTML line pattern such as `"{text} ({refs})"`. A document selects, orders, and omits records per section; it never edits them. Records from another type keep that type's gates, and its records are checked when selected, since it is accepted separately. Lints name this type's kinds only.
 - `[[lints]]`: `forbid` (a regex over text fields), `require`, `match` (every entry matches a regex, with an optional `min`), `max_words`, `max_items`, `reviewed` (every selected record of a kind is reviewed), and `unique` (no two selected records share a field value, such as one bullet per accomplishment). Each takes `level = "error"` (the default, blocks approval) or `"warn"`, and an optional `message`.
 - `template`, `exports` (`pdf`, `md`, `html`), and `filename` with `{owner}`, `{type}`, `{title}`, `{date}` and `{doc.<field>}`.
 
@@ -147,7 +155,7 @@ bun run --cwd spa check
 bun test --cwd spa
 ```
 
-`bun run --cwd spa dev` serves the UI with hot reload and proxies `/api` to a `hoja serve` on port 4520. Gates live in `src/gates.rs` and are enforced in `src/store.rs`; type parsing and value normalization are in `src/config.rs`; lints in `src/lint.rs`; rendering in `src/render.rs`. The HTTP tests in `tests/http.rs` render a real PDF when `typst` is on `PATH`.
+`bun run --cwd spa dev` serves the UI with hot reload and proxies `/api` to a `hoja serve` on port 4520. Gates live in `src/gates.rs` and are enforced in `src/store.rs`; type parsing and value normalization are in `src/config.rs`; lints in `src/lint.rs`; rendering in `src/render.rs`; the template gate in `src/templates.rs`; Markdown in `src/markdown.rs`; the provenance view in `src/provenance.rs`. The HTTP tests in `tests/http.rs` render real PDFs, including every example template from its samples and from placeholders, when `typst` is on `PATH`.
 
 ## License
 

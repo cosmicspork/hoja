@@ -41,7 +41,11 @@ test('eligible respects kind, where filters and deletion', () => {
     record('3', 'note', { status: 'done' }),
     record('4', 'item', { status: 'done' }, true)
   ];
-  expect(eligible(records, section).map(r => r.id)).toEqual(['1']);
+  expect(eligible(records, section, 't').map(r => r.id)).toEqual(['1']);
+  // A section can select from another type; then only that type's records qualify.
+  expect(eligible(records, { ...section, type: 'raid' }, 't')).toEqual([]);
+  const raid = { ...record('5', 'item', { status: 'done' }), type: 'raid' };
+  expect(eligible([...records, raid], { ...section, type: 'raid' }, 't').map(r => r.id)).toEqual(['5']);
 });
 
 test('move swaps neighbours and ignores out-of-range moves', () => {

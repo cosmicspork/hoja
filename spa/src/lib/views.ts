@@ -31,9 +31,10 @@ export function filterRecords(records: HojaRecord[], query: string): HojaRecord[
   return records.filter(record => Object.values(record.fields).some(v => display(v).toLowerCase().includes(needle)));
 }
 
-/** Records a section may hold: the right kind, and matching its `where` filter. */
-export function eligible(records: HojaRecord[], section: SectionConfig): HojaRecord[] {
-  return records.filter(record => record.kind === section.kind && !record.deleted
+/** Records a section may hold: the right type and kind, and matching its `where` filter. */
+export function eligible(records: HojaRecord[], section: SectionConfig, documentType: string): HojaRecord[] {
+  const type = section.type ?? documentType;
+  return records.filter(record => record.type === type && record.kind === section.kind && !record.deleted
     && Object.entries(section.where ?? {}).every(([field, expected]) => record.fields[field] === expected));
 }
 

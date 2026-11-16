@@ -91,7 +91,11 @@ pub fn route(actor: &Actor, config: &TypeConfig, write: Write<'_>) -> Route {
             Route::Card
         };
     }
-    if !config.agent_direct || write.settled {
+    let kind_direct = write
+        .kind
+        .and_then(|k| config.kind(k))
+        .is_none_or(|k| k.agent_direct);
+    if !config.agent_direct || !kind_direct || write.settled {
         Route::Card
     } else {
         Route::Direct
@@ -198,6 +202,31 @@ person_only = true
         assert_eq!(
             route(&agent(), &c, write(Op::Select, None, true, &[])),
             Route::Card
+        );
+    }
+
+    #[test]
+    fn a_kind_can_require_cards_for_agent_writes() {
+        let c = TypeConfig::parse(
+            r#"
+first_draft = "agent"
+[kinds.risk]
+agent_direct = false
+[kinds.risk.fields.text]
+type = "text"
+[kinds.issue.fields.text]
+type = "text"
+"#,
+        )
+        .unwrap();
+        let text = ["text".to_string()];
+        assert_eq!(
+            route(&agent(), &c, write(Op::Create, Some("risk"), false, &text)),
+            Route::Card
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Create, Some("issue"), false, &text)),
+            Route::Direct
         );
     }
 

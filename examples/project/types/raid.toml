@@ -1,0 +1,338 @@
+# A RAID log: the project's risks, assumptions, issues and dependencies.
+#
+# The person is the only judge: likelihood, severity, owner and status are
+# theirs alone. Agents may log issues and dependencies directly (they arrive
+# unreviewed, strongly highlighted) and may suggest descriptions and
+# mitigations; a new risk or assumption from an agent arrives as a card.
+# The log itself is published, not approved: per-record review is the
+# signal, and approving a document snapshots the version you sent out.
+title = "RAID log"
+first_draft = "agent"
+template = "raid.typ"
+filename = "{owner}_RAID_{doc.project}_{date}"
+exports = ["pdf", "md", "html"]
+
+# ---- risks ---------------------------------------------------------------
+
+[kinds.risk]
+title = "Risk"
+label = "title"
+agent_direct = false
+
+[kinds.risk.fields.key]
+type = "string"
+title = "ID"
+help = "R-001, R-002, ..."
+
+[kinds.risk.fields.title]
+type = "string"
+required = true
+help = "What might happen, in a few words."
+
+[kinds.risk.fields.description]
+type = "text"
+help = "Cause and effect: because of X, Y might happen, which would Z."
+
+[kinds.risk.fields.likelihood]
+type = "enum"
+options = ["low", "medium", "high"]
+person_only = true
+
+[kinds.risk.fields.severity]
+type = "enum"
+options = ["low", "medium", "high", "critical"]
+person_only = true
+
+[kinds.risk.fields.owner]
+type = "string"
+person_only = true
+
+[kinds.risk.fields.status]
+type = "enum"
+options = ["open", "mitigating", "closed", "occurred"]
+person_only = true
+
+[kinds.risk.fields.mitigation]
+type = "text"
+help = "What we're doing about it, and the trigger for doing more."
+
+[kinds.risk.fields.raised]
+type = "date"
+
+[kinds.risk.fields.review_by]
+type = "date"
+title = "Review by"
+
+[kinds.risk.fields.refs]
+type = "list"
+title = "References"
+help = "Jira keys, meeting notes, messages: where this came from."
+
+# ---- assumptions ---------------------------------------------------------
+
+[kinds.assumption]
+title = "Assumption"
+label = "title"
+agent_direct = false
+
+[kinds.assumption.fields.key]
+type = "string"
+title = "ID"
+help = "A-001, A-002, ..."
+
+[kinds.assumption.fields.title]
+type = "string"
+required = true
+help = "What we're taking as true."
+
+[kinds.assumption.fields.description]
+type = "text"
+help = "Why we assume it, and what changes if it's wrong."
+
+[kinds.assumption.fields.owner]
+type = "string"
+person_only = true
+
+[kinds.assumption.fields.status]
+type = "enum"
+options = ["unvalidated", "valid", "invalid"]
+person_only = true
+
+[kinds.assumption.fields.validate_by]
+type = "date"
+title = "Validate by"
+
+[kinds.assumption.fields.refs]
+type = "list"
+title = "References"
+
+# ---- issues --------------------------------------------------------------
+
+[kinds.issue]
+title = "Issue"
+label = "title"
+
+[kinds.issue.fields.key]
+type = "string"
+title = "ID"
+help = "I-001, I-002, ..."
+
+[kinds.issue.fields.title]
+type = "string"
+required = true
+help = "What is going wrong now, in a few words."
+
+[kinds.issue.fields.description]
+type = "text"
+
+[kinds.issue.fields.severity]
+type = "enum"
+options = ["low", "medium", "high", "critical"]
+person_only = true
+
+[kinds.issue.fields.owner]
+type = "string"
+person_only = true
+
+[kinds.issue.fields.status]
+type = "enum"
+options = ["open", "in_progress", "resolved"]
+person_only = true
+
+[kinds.issue.fields.resolution]
+type = "text"
+
+[kinds.issue.fields.raised]
+type = "date"
+
+[kinds.issue.fields.due]
+type = "date"
+
+[kinds.issue.fields.refs]
+type = "list"
+title = "References"
+
+# ---- dependencies --------------------------------------------------------
+
+[kinds.dependency]
+title = "Dependency"
+label = "title"
+
+[kinds.dependency.fields.key]
+type = "string"
+title = "ID"
+help = "D-001, D-002, ..."
+
+[kinds.dependency.fields.title]
+type = "string"
+required = true
+help = "What we need, in a few words."
+
+[kinds.dependency.fields.on]
+type = "string"
+title = "Depends on"
+help = "The team, vendor or deliverable we're waiting on."
+
+[kinds.dependency.fields.description]
+type = "text"
+
+[kinds.dependency.fields.owner]
+type = "string"
+person_only = true
+
+[kinds.dependency.fields.status]
+type = "enum"
+options = ["pending", "at_risk", "met", "missed"]
+person_only = true
+
+[kinds.dependency.fields.needed_by]
+type = "date"
+title = "Needed by"
+
+[kinds.dependency.fields.refs]
+type = "list"
+title = "References"
+
+# ---- the log -------------------------------------------------------------
+
+[document.fields.project]
+type = "string"
+required = true
+
+[document.fields.as_of]
+type = "date"
+title = "As of"
+
+[document.fields.notes]
+type = "text"
+person_only = true
+help = "Anything a reader needs before the tables, in your own words."
+
+[[document.sections]]
+name = "risks"
+title = "Risks"
+kind = "risk"
+item = "{key} {title} [{severity}] ({status})"
+
+[[document.sections]]
+name = "assumptions"
+title = "Assumptions"
+kind = "assumption"
+item = "{key} {title} ({status})"
+
+[[document.sections]]
+name = "issues"
+title = "Issues"
+kind = "issue"
+item = "{key} {title} [{severity}] ({status})"
+
+[[document.sections]]
+name = "dependencies"
+title = "Dependencies"
+kind = "dependency"
+item = "{key} {title} [{on}] ({status})"
+
+# IDs: one per entry, in the kind's own series.
+[[lints]]
+rule = "unique"
+kind = "risk"
+field = "key"
+
+[[lints]]
+rule = "unique"
+kind = "assumption"
+field = "key"
+
+[[lints]]
+rule = "unique"
+kind = "issue"
+field = "key"
+
+[[lints]]
+rule = "unique"
+kind = "dependency"
+field = "key"
+
+[[lints]]
+rule = "match"
+kind = "risk"
+field = "key"
+pattern = '^R-[0-9]{3}$'
+min = 1
+level = "warn"
+message = "give it an ID like R-001"
+
+[[lints]]
+rule = "match"
+kind = "assumption"
+field = "key"
+pattern = '^A-[0-9]{3}$'
+min = 1
+level = "warn"
+message = "give it an ID like A-001"
+
+[[lints]]
+rule = "match"
+kind = "issue"
+field = "key"
+pattern = '^I-[0-9]{3}$'
+min = 1
+level = "warn"
+message = "give it an ID like I-001"
+
+[[lints]]
+rule = "match"
+kind = "dependency"
+field = "key"
+pattern = '^D-[0-9]{3}$'
+min = 1
+level = "warn"
+message = "give it an ID like D-001"
+
+# Triage: an entry an agent logged waits for your judgment.
+[[lints]]
+rule = "require"
+kind = "risk"
+field = "severity"
+level = "warn"
+message = "rate its severity"
+
+[[lints]]
+rule = "require"
+kind = "risk"
+field = "likelihood"
+level = "warn"
+message = "rate its likelihood"
+
+[[lints]]
+rule = "require"
+kind = "risk"
+field = "owner"
+level = "warn"
+message = "name an owner"
+
+[[lints]]
+rule = "require"
+kind = "issue"
+field = "severity"
+level = "warn"
+message = "rate its severity"
+
+[[lints]]
+rule = "require"
+kind = "issue"
+field = "owner"
+level = "warn"
+message = "name an owner"
+
+[[lints]]
+rule = "require"
+kind = "dependency"
+field = "status"
+level = "warn"
+message = "set a status"
+
+[[lints]]
+rule = "forbid"
+pattern = "[—–]"
+message = "no em or en dashes"

@@ -11,8 +11,8 @@ export interface FieldConfig {
   options?: string[];
   ref_kind?: string;
 }
-export interface KindConfig { title?: string; label?: string; fields: Record<string, FieldConfig> }
-export interface SectionConfig { name: string; title?: string; kind: string; where?: Record<string, string>; group_by?: string; item?: string }
+export interface KindConfig { title?: string; label?: string; agent_direct?: boolean; fields: Record<string, FieldConfig> }
+export interface SectionConfig { name: string; title?: string; /** Select records of this other type. */ type?: string; kind: string; where?: Record<string, string>; group_by?: string; item?: string }
 export interface TypeConfig {
   title?: string;
   first_draft: 'human' | 'agent';

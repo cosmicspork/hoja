@@ -20,8 +20,8 @@ struct Server {
 }
 
 fn copy_example(to: &Path) {
-    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/status-report");
-    for dir in ["", "types", "templates"] {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/project");
+    for dir in ["", "types", "templates", "samples"] {
         std::fs::create_dir_all(to.join(dir)).unwrap();
         for entry in std::fs::read_dir(from.join(dir)).unwrap() {
             let entry = entry.unwrap();
@@ -191,8 +191,9 @@ async fn person_routes_need_the_page_origin() {
     let server = start().await;
     let (status, state) = server.send(server.person("GET", "/api/state", "")).await;
     assert_eq!(status, 200);
-    assert_eq!(state["types"][0]["state"], "new");
-    let body = json!({"hash": state["types"][0]["file_hash"]}).to_string();
+    let report = named(&state["types"], "name", "status-report");
+    assert_eq!(report["state"], "new");
+    let body = json!({"hash": report["file_hash"]}).to_string();
 
     let mut foreign = server.person("POST", "/api/types/status-report/accept", &body);
     foreign.origin = Some("http://evil.example".into());
@@ -402,13 +403,13 @@ async fn exports_land_in_out_with_draft_names() {
 async fn templates_are_previewed_before_acceptance_and_approval_needs_the_shown_hash() {
     let server = start().await;
     let (_, state) = server.send(server.person("GET", "/api/state", "")).await;
-    let type_hash = state["types"][0]["file_hash"].clone();
+    let type_hash = named(&state["types"], "name", "status-report")["file_hash"].clone();
     let body = json!({"hash": type_hash}).to_string();
     let (status, _) = server
         .send(server.person("POST", "/api/types/status-report/accept", &body))
         .await;
     assert_eq!(status, 200);
-    let template = &state["templates"][0];
+    let template = named(&state["templates"], "path", "status-report.typ");
     assert_eq!(template["path"], "status-report.typ");
     assert_eq!(template["state"], "new");
     let hash = template["file_hash"].as_str().unwrap().to_string();
@@ -443,6 +444,24 @@ async fn templates_are_previewed_before_acceptance_and_approval_needs_the_shown_
         .await;
     assert_eq!(change["used_by"], json!(["status-report"]));
     assert!(change["file_text"].as_str().unwrap().contains("data.json"));
+    if which("typst") {
+        // The template imports common.typ, which nobody has accepted yet:
+        // it isn't in the render root, so the preview fails to compile.
+        let body = json!({"path": "status-report.typ", "hash": hash, "type": "status-report"});
+        let (status, refused) = server
+            .send(server.person("POST", "/api/templates/preview", &body.to_string()))
+            .await;
+        assert_eq!(status, 422, "{refused}");
+        let message = refused["message"].as_str().unwrap();
+        assert!(message.contains("templates/common.typ"), "{message}");
+        assert!(!message.contains("/tmp"), "{message}");
+    }
+    let common = named(&state["templates"], "path", "common.typ");
+    let body = json!({"path": "common.typ", "hash": common["file_hash"]}).to_string();
+    let (status, _) = server
+        .send(server.person("POST", "/api/templates/accept", &body))
+        .await;
+    assert_eq!(status, 200);
     if which("typst") {
         for source in [json!(null), json!(id)] {
             let mut body =
@@ -527,6 +546,154 @@ async fn markdown_previews_and_provenance_come_from_the_server() {
     assert_eq!(label["agent"], "claude");
     // "Shipped sync", plus the status and refs fields.
     assert_eq!(provenance["summary"]["agent_words"], 4);
+}
+
+#[tokio::test]
+async fn example_templates_render_from_samples_and_placeholders() {
+    if !which("typst") {
+        eprintln!("typst is not on PATH; skipping the example template renders");
+        return;
+    }
+    let server = start().await;
+    server.accept_types().await;
+    let (_, state) = server.send(server.person("GET", "/api/state", "")).await;
+    let templates = state["templates"].as_array().unwrap();
+    let common = templates
+        .iter()
+        .find(|t| t["path"] == "common.typ")
+        .unwrap();
+    let mut users: Vec<&str> = common["used_by"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    users.sort();
+    assert_eq!(users, vec!["project-charter", "raid", "status-report"]);
+    for with_samples in [true, false] {
+        if !with_samples {
+            std::fs::remove_dir_all(server.root.join("samples")).unwrap();
+        }
+        for t in templates.iter().filter(|t| t["path"] != "common.typ") {
+            let path = t["path"].as_str().unwrap();
+            let type_name = path.trim_end_matches(".typ");
+            let body = json!({"path": path, "hash": t["file_hash"], "type": type_name}).to_string();
+            let (status, pdf) = server
+                .send(server.person("POST", "/api/templates/preview", &body))
+                .await;
+            assert_eq!(status, 200, "{path} (samples: {with_samples}): {pdf}");
+            assert_eq!(pdf["pdf"], true);
+        }
+    }
+}
+
+#[tokio::test]
+async fn reports_select_from_the_raid_log_under_its_own_gates() {
+    let server = start().await;
+    server.accept_types().await;
+    let lines = std::fs::read_to_string(server.root.join("sample.jsonl")).unwrap();
+    let mut issue = String::new();
+    let mut risk_card = String::new();
+    for line in lines.lines() {
+        let (status, out) = server
+            .send(server.agent("POST", "/api/agent/records", line))
+            .await;
+        let value: Value = serde_json::from_str(line).unwrap();
+        match value["kind"].as_str().unwrap() {
+            // Risks need the person: the raid type sets agent_direct = false on them.
+            "risk" => {
+                assert_eq!(status, 202, "{out}");
+                risk_card = out["approval_id"].as_str().unwrap().to_string();
+            }
+            "issue" => {
+                assert_eq!(status, 200, "{out}");
+                issue = out["result"]["id"].as_str().unwrap().to_string();
+            }
+            _ => assert_eq!(status, 200, "{out}"),
+        }
+    }
+    assert!(!risk_card.is_empty() && !issue.is_empty());
+    // Agents can't rate entries at all.
+    let rate = json!({"version": 1, "fields": {"severity": "high"}}).to_string();
+    let (status, _) = server
+        .send(server.agent("POST", &format!("/api/agent/records/{issue}"), &rate))
+        .await;
+    assert_eq!(status, 403);
+
+    let doc = json!({"type": "status-report", "title": "October", "fields": {"period": "2026-10", "summary": "Quiet."}})
+        .to_string();
+    let (_, created) = server
+        .send(server.person("POST", "/api/documents", &doc))
+        .await;
+    let id = created["result"]["id"].as_str().unwrap().to_string();
+    // A RAID issue can't go in the risks section, and a status item can't go in issues.
+    let wrong = json!({"version": 1, "record_ids": [issue]}).to_string();
+    let (status, _) = server
+        .send(server.person(
+            "PUT",
+            &format!("/api/documents/{id}/sections/risks"),
+            &wrong,
+        ))
+        .await;
+    assert_eq!(status, 400);
+    let (status, out) = server
+        .send(server.agent(
+            "POST",
+            &format!("/api/agent/documents/{id}/sections/issues"),
+            &wrong,
+        ))
+        .await;
+    assert_eq!(status, 200, "{out}");
+    let (status, approved) = server.approve(&id).await;
+    assert_eq!(status, 200, "{approved}");
+
+    // The person rates the issue in the RAID log; the report that shows it returns to draft.
+    let rate = json!({"version": 1, "fields": {"severity": "high"}}).to_string();
+    let (status, _) = server
+        .send(server.person("PUT", &format!("/api/records/{issue}"), &rate))
+        .await;
+    assert_eq!(status, 200);
+    let (_, view) = server
+        .send(server.person("GET", &format!("/api/documents/{id}"), ""))
+        .await;
+    assert_eq!(view["document"]["approved"], false);
+    let item = &view["provenance"]["sections"][4]["groups"][0]["items"][0];
+    assert_eq!(item["type"], "raid");
+    assert_eq!(
+        item["label"][0]["text"],
+        "Report export times out for reports with 200+ photos"
+    );
+    let severity = item["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "severity")
+        .unwrap();
+    assert_eq!(severity["spans"][0]["changed"], true);
+
+    let (status, built) = server
+        .send(server.agent(
+            "POST",
+            &format!("/api/agent/documents/{id}/build"),
+            "{\"format\":\"md\"}",
+        ))
+        .await;
+    assert_eq!(status, 200, "{built}");
+    let md = std::fs::read_to_string(built["path"].as_str().unwrap()).unwrap();
+    assert!(
+        md.contains(
+            "## Open issues\n\n- I-001 Report export times out for reports with 200+ photos [high]"
+        ),
+        "{md}"
+    );
+}
+
+fn named<'a>(list: &'a Value, key: &str, name: &str) -> &'a Value {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v[key] == name)
+        .unwrap_or_else(|| panic!("no {name} in {list}"))
 }
 
 fn which(binary: &str) -> bool {

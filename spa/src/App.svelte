@@ -82,7 +82,7 @@
     {:else if route.view === 'document'}
       {@const config = configOf(documentType)}
       {#if config}
-        {#key route.id}<DocumentView id={route.id} {config} onchange={refresh} />{/key}
+        {#key route.id}<DocumentView id={route.id} {config} configs={Object.fromEntries(accepted.map(t => [t.name, t.config!]))} onchange={refresh} />{/key}
       {:else}
         <p class="empty">Loading…</p>
       {/if}

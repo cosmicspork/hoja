@@ -1,0 +1,25 @@
+{
+  "title": "October",
+  "fields": {
+    "period": "2026-10",
+    "summary": "A steady month: offline sync shipped and export got **four times faster**. The redaction dependency is the one to watch."
+  },
+  "sections": {
+    "done": [
+      {"fields": {"text": "Shipped offline sync for the field inspection app", "status": "done", "project": "Inspections", "refs": ["a41c9e2", "!218"]}},
+      {"fields": {"text": "Cut median report export time from 9 seconds to 2 by batching photo uploads", "status": "done", "project": "Inspections", "refs": ["INSP-412"]}}
+    ],
+    "in_progress": [
+      {"fields": {"text": "Accessibility pass on the inspector dashboard", "status": "in_progress", "project": "Inspections", "refs": ["INSP-430"]}}
+    ],
+    "next": [
+      {"fields": {"text": "Pilot photo redaction with two county offices", "status": "next", "project": "Inspections", "refs": ["INSP-441"]}}
+    ],
+    "risks": [
+      {"fields": {"key": "R-002", "title": "County IT blocks the photo upload domain", "severity": "medium", "status": "open", "mitigation": "Ask both pilot counties to allowlist the domain before go-live."}}
+    ],
+    "issues": [
+      {"fields": {"key": "I-001", "title": "Report export times out for reports with 200+ photos", "severity": "high", "owner": "Sam Rivera", "due": "2026-11-21"}}
+    ]
+  }
+}

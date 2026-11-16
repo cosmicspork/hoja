@@ -1,0 +1,32 @@
+{
+  "title": "Field inspections: project charter",
+  "fields": {
+    "project": "Field inspections",
+    "sponsor": "Dana Okafor",
+    "manager": "Sam Rivera",
+    "purpose": "County inspectors file reports on paper and retype them at the office, which delays permits by a week on average. This project gives them a mobile app that works offline and files the report on the spot.",
+    "background": "Three counties asked for this in the 2026 survey. A 2024 attempt stalled on **offline support**, which is now solved by the sync work in the shared platform.",
+    "objectives": "- Cut the time from inspection to filed report from 6 days to 1\n- Retire the paper form in the two pilot counties\n- Keep the app usable with no signal for a full day",
+    "scope": "- The inspector app: forms, photos, signatures, offline sync\n- Report export to the permit system\n- Training for the two pilot counties",
+    "out_of_scope": "- Changes to the permit system itself\n- Counties beyond the pilot until the pilot review in March",
+    "deliverables": "1. The inspector app in both app stores\n2. Export to the permit system\n3. A training kit for county staff",
+    "success_criteria": "Both pilot counties file 90% of inspections in the app by the end of February, with no lost reports.",
+    "constraints": "The permit system's API is read-only until its upgrade in Q2, so export goes through the nightly import.",
+    "budget": "Two engineers and a designer for six months; hosting within the existing platform budget."
+  },
+  "sections": {
+    "milestones": [
+      {"fields": {"name": "Pilot build", "target": "2026-12-05", "description": "Inspectors in both counties can file a report offline."}},
+      {"fields": {"name": "Pilot review", "target": "2027-03-01", "description": "Decide on rollout from the pilot numbers."}}
+    ],
+    "stakeholders": [
+      {"fields": {"name": "Dana Okafor", "role": "Sponsor", "involvement": "decides"}},
+      {"fields": {"name": "County inspection leads", "role": "Pilot users", "involvement": "consulted", "notes": "Weekly check-in during the pilot."}},
+      {"fields": {"name": "Permit system team", "role": "Integration", "involvement": "informed"}}
+    ],
+    "risks": [
+      {"fields": {"key": "R-001", "title": "Offline sync conflicts lose inspector edits", "likelihood": "medium", "severity": "high", "owner": "Sam Rivera"}},
+      {"fields": {"key": "R-002", "title": "County IT blocks the photo upload domain", "likelihood": "high", "severity": "medium", "owner": "Priya Nair"}}
+    ]
+  }
+}

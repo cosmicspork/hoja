@@ -642,7 +642,7 @@ pub fn build(inputs: Inputs<'_>) -> Provenance {
             let kind = inputs
                 .resolved
                 .configs
-                .get(&resolved.document.type_name)
+                .get(config.section_type(section_config, &resolved.document.type_name))
                 .and_then(|c| c.kind(&section_config.kind));
             kind.and_then(|k| k.label_field())
                 .and_then(|f| fields.get(f))

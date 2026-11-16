@@ -1,0 +1,160 @@
+# A project charter: sectioned prose the person writes. Each section is a
+# document field in Markdown. Agents can't write a first draft; they suggest
+# edits to a section, which arrive as cards with a word diff. Milestones and
+# stakeholders are records; the initial risks are selected from the RAID log.
+# Approve the version that goes out for sign-off; any later change returns
+# it to draft.
+title = "Project charter"
+first_draft = "human"
+template = "project-charter.typ"
+filename = "{owner}_Charter_{doc.project}"
+exports = ["pdf", "md", "html"]
+
+[kinds.milestone]
+title = "Milestone"
+label = "name"
+
+[kinds.milestone.fields.name]
+type = "string"
+required = true
+
+[kinds.milestone.fields.target]
+type = "date"
+title = "Target date"
+
+[kinds.milestone.fields.description]
+type = "text"
+help = "What is true when it's done."
+
+[kinds.stakeholder]
+title = "Stakeholder"
+label = "name"
+
+[kinds.stakeholder.fields.name]
+type = "string"
+required = true
+help = "A person, team or group."
+
+[kinds.stakeholder.fields.role]
+type = "string"
+help = "Sponsor, product owner, support lead, ..."
+
+[kinds.stakeholder.fields.involvement]
+type = "enum"
+options = ["decides", "approves", "consulted", "informed"]
+
+[kinds.stakeholder.fields.notes]
+type = "text"
+
+[document.fields.project]
+type = "string"
+required = true
+
+[document.fields.sponsor]
+type = "string"
+person_only = true
+
+[document.fields.manager]
+type = "string"
+title = "Project manager"
+
+[document.fields.purpose]
+type = "text"
+help = "Why this project exists, in two or three sentences."
+
+[document.fields.background]
+type = "text"
+
+[document.fields.objectives]
+type = "text"
+help = "What success looks like; measurable where you can."
+
+[document.fields.scope]
+type = "text"
+title = "In scope"
+
+[document.fields.out_of_scope]
+type = "text"
+title = "Out of scope"
+
+[document.fields.deliverables]
+type = "text"
+
+[document.fields.success_criteria]
+type = "text"
+title = "Success criteria"
+
+[document.fields.constraints]
+type = "text"
+title = "Constraints"
+help = "Deadlines, budget limits, policies, fixed technology choices."
+
+[document.fields.budget]
+type = "text"
+title = "Budget and resources"
+
+[[document.sections]]
+name = "milestones"
+title = "Milestones"
+kind = "milestone"
+item = "{name} ({target})"
+
+[[document.sections]]
+name = "stakeholders"
+title = "Stakeholders"
+kind = "stakeholder"
+item = "{name}, {role} ({involvement})"
+
+[[document.sections]]
+name = "risks"
+title = "Initial risks"
+type = "raid"
+kind = "risk"
+item = "{key} {title} [{severity}]"
+
+[[lints]]
+rule = "require"
+kind = "document"
+field = "sponsor"
+message = "name the sponsor who signs off"
+
+[[lints]]
+rule = "require"
+kind = "document"
+field = "purpose"
+
+[[lints]]
+rule = "require"
+kind = "document"
+field = "objectives"
+
+[[lints]]
+rule = "require"
+kind = "document"
+field = "scope"
+
+[[lints]]
+rule = "require"
+kind = "document"
+field = "out_of_scope"
+level = "warn"
+message = "say what's out of scope; it's where disagreements start"
+
+[[lints]]
+rule = "max_words"
+kind = "document"
+field = "purpose"
+max = 120
+level = "warn"
+
+[[lints]]
+rule = "max_items"
+section = "risks"
+max = 8
+level = "warn"
+message = "keep the charter to the top risks; the RAID log holds the rest"
+
+[[lints]]
+rule = "forbid"
+pattern = "[—–]"
+message = "no em or en dashes"

@@ -157,7 +157,7 @@ impl Resolved {
         let layout = json!({
             "title": config.title,
             "sections": config.document.sections.iter().map(|s| json!({
-                "name": s.name, "title": s.title, "kind": s.kind,
+                "name": s.name, "title": s.title, "type": s.from_type, "kind": s.kind,
                 "item": s.item, "group_by": s.group_by,
             })).collect::<Vec<_>>(),
             "fields": config.document.fields.iter().map(|(n, f)| (n.clone(), json!(f.title))).collect::<Map<_, _>>(),
@@ -875,6 +875,14 @@ impl Store {
         }
         let mut configs = HashMap::new();
         configs.insert(document.type_name.clone(), config.clone());
+        for section in &config.document.sections {
+            if let Some(other) = &section.from_type
+                && !configs.contains_key(other)
+                && let Ok(other_config) = self.config(other)
+            {
+                configs.insert(other.clone(), other_config);
+            }
+        }
         let template = self.template_set()?.fingerprint(config.template.as_deref());
         let mut resolved = Resolved {
             config,
@@ -1037,6 +1045,7 @@ impl Store {
             &document.type_name,
             section,
             &input.record_ids,
+            &|name| self.config(name),
         )?;
         let current = section_ids(&document, section);
         if current == input.record_ids {
@@ -1324,7 +1333,9 @@ impl Store {
                 let section = payload["section"].as_str().unwrap_or_default();
                 let ids = string_list(&payload["record_ids"])?;
                 load_document(tx, id)?.ok_or(StoreError::NotFound)?;
-                validate_selection(tx, &config, &approval.type_name, section, &ids)?;
+                validate_selection(tx, &config, &approval.type_name, section, &ids, &|name| {
+                    self.config(name)
+                })?;
                 let version = write_section(tx, id, section, &ids, attrib)?;
                 Ok(json!({"document_id": id, "version": version}))
             }
@@ -1940,6 +1951,7 @@ fn validate_selection(
     type_name: &str,
     section: &str,
     ids: &[String],
+    configs: &dyn Fn(&str) -> Result<Arc<TypeConfig>, StoreError>,
 ) -> Result<(), StoreError> {
     let section_config = config
         .section(section)
@@ -1948,6 +1960,26 @@ fn validate_selection(
         return Err(StoreError::Invalid(format!(
             "a section holds at most {MAX_SELECTION} records"
         )));
+    }
+    let source = config.section_type(section_config, type_name);
+    if source != type_name {
+        let other = configs(source)?;
+        let kind = other.kind(&section_config.kind).ok_or_else(|| {
+            StoreError::Invalid(format!(
+                "section `{section}` selects `{}` records, which type `{source}` doesn't have",
+                section_config.kind
+            ))
+        })?;
+        if let Some(field) = section_config
+            .filter
+            .keys()
+            .find(|f| !kind.fields.contains_key(*f))
+        {
+            return Err(StoreError::Invalid(format!(
+                "section `{section}` filters on `{field}`, which `{source}` `{}` records don't have",
+                section_config.kind
+            )));
+        }
     }
     for (i, id) in ids.iter().enumerate() {
         if ids[..i].contains(id) {
@@ -1958,9 +1990,9 @@ fn validate_selection(
         let record = load_record(connection, id)?
             .filter(|r| !r.deleted)
             .ok_or_else(|| StoreError::Invalid(format!("record {id} does not exist")))?;
-        if record.type_name != type_name || record.kind != section_config.kind {
+        if record.type_name != source || record.kind != section_config.kind {
             return Err(StoreError::Invalid(format!(
-                "section `{section}` takes {} records",
+                "section `{section}` takes {source} {} records",
                 section_config.kind
             )));
         }

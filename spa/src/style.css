@@ -223,7 +223,7 @@ pre.lines .skip { display: block; color: var(--muted); font-style: italic; paddi
 .provenance li { margin: 6px 0; }
 .provenance li.added { outline: 2px dashed var(--warn); outline-offset: 3px; border-radius: 4px; }
 .provenance .removed-items { color: var(--bad); text-decoration: line-through; font-size: 12.5px; }
-.pv.accepted { background: color-mix(in srgb, var(--agent-soft) 75%, transparent); border-radius: 3px; }
+.pv.accepted { background: color-mix(in srgb, var(--agent) 24%, transparent); border-radius: 3px; }
 .pv.agent { background: var(--agent); color: var(--paper); border-radius: 3px; padding: 0 1px; }
 .pv.changed { text-decoration: underline wavy var(--warn); text-underline-offset: 3px; }
 .pv.removed { color: var(--bad); text-decoration: line-through; opacity: .8; }
