@@ -166,6 +166,9 @@ summary { cursor: pointer; color: var(--accent); }
 .subhead { margin: 28px 0 10px; }
 .decided li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
 
+.template-review { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 48%); gap: 18px; align-items: start; }
+.template-review .preview iframe { height: 75vh; }
+.template-review select { width: auto; }
 pre.lines { margin: 0; font-size: 12px; line-height: 1.5; overflow-x: auto; }
 pre.lines .add { display: block; background: var(--accent-soft); color: var(--accent); }
 pre.lines .remove { display: block; background: var(--bad-soft); color: var(--bad); }
@@ -173,7 +176,7 @@ pre.lines .same { display: block; color: var(--muted); }
 pre.lines .skip { display: block; color: var(--muted); font-style: italic; padding: 2px 0; }
 
 @media (max-width: 1100px) {
-  .doc-layout { grid-template-columns: 1fr; }
+  .doc-layout, .template-review { grid-template-columns: 1fr; }
   .preview { position: static; }
   .preview iframe { height: 70vh; }
 }

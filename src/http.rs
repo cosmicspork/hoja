@@ -22,8 +22,8 @@ use crate::config::{Format, Workspace};
 use crate::gates::Actor;
 use crate::lint;
 use crate::model::{
-    AcceptType, CreateDocument, CreateRecord, Decide, Outcome, SelectSection, SetReviewed,
-    UpdateDocument, UpdateRecord, VersionOnly,
+    AcceptTemplate, AcceptType, Approve, CreateDocument, CreateRecord, Decide, Outcome,
+    SelectSection, SetReviewed, UpdateDocument, UpdateRecord, VersionOnly,
 };
 use crate::render::{self, RenderError, Typst};
 use crate::store::{Resolved, Store, StoreError};
@@ -185,11 +185,34 @@ struct WaitQuery {
     wait: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct PathQuery {
+    path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TemplatePreview {
+    path: String,
+    hash: String,
+    #[serde(rename = "type")]
+    type_name: String,
+    /// Render this document instead of the type's sample data.
+    #[serde(default)]
+    document: Option<String>,
+}
+
 // ---- shared reads ---------------------------------------------------------
 
 fn type_files(app: &App) -> Result<Vec<crate::config::TypeFile>, StoreError> {
     app.workspace
         .type_files()
+        .map_err(|e| StoreError::Invalid(format!("{e:#}")))
+}
+
+fn template_files(app: &App) -> Result<Vec<crate::templates::DiskTemplate>, StoreError> {
+    app.workspace
+        .template_files()
         .map_err(|e| StoreError::Invalid(format!("{e:#}")))
 }
 
@@ -221,6 +244,7 @@ fn document_view(app: &App, resolved: &Resolved) -> Value {
         .collect();
     json!({
         "document": resolved.document,
+        "content_hash": resolved.content_hash(),
         "lints": findings,
         "blocking": lint::errors(&findings),
         "exports": files,
@@ -253,9 +277,17 @@ async fn rendered(app: &App, id: String, format: Format) -> Result<(Resolved, Ve
     }
     let bytes = match format {
         Format::Pdf => {
+            if resolved.config.template.is_none() {
+                return Err(render_error(RenderError::NoTemplate));
+            }
+            let store = app.store.clone();
+            let config = resolved.config.clone();
+            let (entry, files) = blocking(move || store.template_closure(&config))
+                .await?
+                .map_err(store_error)?;
             let data = render::data(&resolved, app.workspace.config.owner.as_deref(), &today());
             app.typst
-                .pdf(&resolved.config, &data)
+                .pdf(&files, &entry, &data)
                 .await
                 .map_err(render_error)?
         }
@@ -312,12 +344,18 @@ async fn state(State(app): State<App>) -> ApiResult {
             Ok(files) => (app.store.type_statuses(&files)?, None),
             Err(e) => (app.store.type_statuses(&[])?, Some(e.to_string())),
         };
+        let (templates, templates_error) = match template_files(&app) {
+            Ok(files) => (app.store.template_statuses(&files)?, None),
+            Err(e) => (app.store.template_statuses(&[])?, Some(e.to_string())),
+        };
         let pending = app.store.approvals(Some("pending"))?.len();
         Ok(json!({
             "owner": app.workspace.config.owner,
             "workspace": app.workspace.root,
             "types": types,
             "types_error": files_error,
+            "templates": templates,
+            "templates_error": templates_error,
             "pending_approvals": pending,
         }))
     })
@@ -340,6 +378,106 @@ async fn accept_type(
         Ok(json!({"accepted": name}))
     })
     .await
+}
+
+async fn template_change(State(app): State<App>, Query(q): Query<PathQuery>) -> ApiResult {
+    run(move || app.store.template_change(&q.path, &template_files(&app)?)).await
+}
+
+async fn accept_template(
+    State(app): State<App>,
+    bytes: Result<Bytes, BytesRejection>,
+) -> ApiResult {
+    let input: AcceptTemplate = parse(bytes)?;
+    run(move || {
+        app.store.accept_template(
+            &Actor::Person,
+            &input.path,
+            &input.hash,
+            &template_files(&app)?,
+        )?;
+        Ok(json!({"accepted": input.path}))
+    })
+    .await
+}
+
+/// Renders a type with one template file replaced by the copy on disk, so
+/// the person sees what accepting it would produce. The type is read from
+/// disk too when it parses, since a new template usually arrives with a new
+/// or changed type file.
+async fn template_preview(
+    State(app): State<App>,
+    bytes: Result<Bytes, BytesRejection>,
+) -> Response {
+    let input: TemplatePreview = match parse(bytes) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let job_app = app.clone();
+    let prepared = blocking(move || -> Result<_, StoreError> {
+        let app = job_app;
+        let files = template_files(&app)?;
+        let disk = files
+            .iter()
+            .find(|f| f.path == input.path)
+            .ok_or(StoreError::NotFound)?;
+        if disk.file.hash != input.hash {
+            return Err(StoreError::Conflict);
+        }
+        let set = app
+            .store
+            .template_set()?
+            .with(&input.path, disk.file.clone());
+        let on_disk = type_files(&app)?
+            .into_iter()
+            .find(|f| f.name == input.type_name)
+            .and_then(|f| crate::config::TypeConfig::parse(&f.body).ok());
+        let config = match on_disk {
+            Some(config) => Arc::new(config),
+            None => app.store.config(&input.type_name)?,
+        };
+        let entry = config.template.clone().ok_or_else(|| {
+            StoreError::Invalid("this type has no template, so it has no PDF".into())
+        })?;
+        let closure = set.closure(&entry).map_err(StoreError::Invalid)?;
+        let owner = app.workspace.config.owner.as_deref();
+        let data = match &input.document {
+            Some(id) => {
+                let resolved = app.store.resolve(id)?;
+                if resolved.document.type_name != input.type_name {
+                    return Err(StoreError::Invalid(format!(
+                        "that document is not a {}",
+                        input.type_name
+                    )));
+                }
+                render::data(&resolved, owner, &today())
+            }
+            None => {
+                let sample = app
+                    .workspace
+                    .sample(&input.type_name)
+                    .map_err(|e| StoreError::Invalid(format!("{e:#}")))?;
+                let mut configs = std::collections::HashMap::new();
+                for (name, c) in app.store.accepted_types()? {
+                    configs.insert(name, c);
+                }
+                configs.insert(input.type_name.clone(), config.clone());
+                let resolved = render::sample(&input.type_name, config, configs, sample.as_ref());
+                render::data(&resolved, owner, &today())
+            }
+        };
+        Ok((closure, entry, data))
+    })
+    .await;
+    let (closure, entry, data) = match prepared {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return store_error(e),
+        Err(response) => return response,
+    };
+    match app.typst.pdf(&closure, &entry, &data).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "application/pdf")], bytes).into_response(),
+        Err(e) => render_error(e),
+    }
 }
 
 async fn create_record(State(app): State<App>, bytes: Result<Bytes, BytesRejection>) -> Response {
@@ -426,11 +564,10 @@ async fn approve(
     Path(id): Path<String>,
     bytes: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
-    let input: VersionOnly = parse(bytes)?;
+    let input: Approve = parse(bytes)?;
     run(move || {
-        let blocking = lint::errors(&lint::lint(&app.store.resolve(&id)?));
         app.store
-            .approve_document(&Actor::Person, &id, input.version, blocking)
+            .approve_document(&Actor::Person, &id, input.version, &input.hash)
     })
     .await
 }
@@ -712,6 +849,9 @@ pub fn router(app: App) -> Router {
         .route("/api/state", get(state))
         .route("/api/types/{name}/change", get(type_change))
         .route("/api/types/{name}/accept", post(accept_type))
+        .route("/api/templates/change", get(template_change))
+        .route("/api/templates/accept", post(accept_template))
+        .route("/api/templates/preview", post(template_preview))
         .route("/api/records", get(records).post(create_record))
         .route("/api/records/{id}", get(record).put(update_record))
         .route("/api/records/{id}/reviewed", post(set_reviewed))

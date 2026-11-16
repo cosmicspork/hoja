@@ -44,7 +44,6 @@ async fn start() -> Server {
         store,
         typst: Arc::new(Typst {
             binary: "typst".into(),
-            templates: workspace.templates(),
             fonts: workspace.root.join("fonts"),
         }),
         workspace: Arc::new(workspace),
@@ -104,6 +103,24 @@ impl Server {
             let (status, _) = self.send(self.person("POST", &path, &body)).await;
             assert_eq!(status, 200);
         }
+        for t in state["templates"].as_array().unwrap() {
+            let body = json!({"path": t["path"], "hash": t["file_hash"]}).to_string();
+            let (status, response) = self
+                .send(self.person("POST", "/api/templates/accept", &body))
+                .await;
+            assert_eq!(status, 200, "{response}");
+        }
+    }
+
+    /// Approves as the person, with the content hash the document page shows.
+    async fn approve(&self, id: &str) -> (u16, Value) {
+        let (_, view) = self
+            .send(self.person("GET", &format!("/api/documents/{id}"), ""))
+            .await;
+        let body = json!({"version": view["document"]["version"], "hash": view["content_hash"]})
+            .to_string();
+        self.send(self.person("POST", &format!("/api/documents/{id}/approve"), &body))
+            .await
     }
 }
 
@@ -352,26 +369,13 @@ async fn exports_land_in_out_with_draft_names() {
     );
 
     // The summary lint blocks approval until the person writes it.
-    let approve_path = format!("/api/documents/{id}/approve");
-    assert_eq!(
-        server
-            .send(server.person("POST", &approve_path, "{\"version\":2}"))
-            .await
-            .0,
-        400
-    );
+    assert_eq!(server.approve(&id).await.0, 400);
     let summary = json!({"version": 2, "fields": {"summary": "A steady month."}}).to_string();
     let (status, _) = server
         .send(server.person("PUT", &format!("/api/documents/{id}"), &summary))
         .await;
     assert_eq!(status, 200);
-    let (status, approved) = server
-        .send(server.person(
-            "POST",
-            &format!("/api/documents/{id}/approve"),
-            "{\"version\":3}",
-        ))
-        .await;
+    let (status, approved) = server.approve(&id).await;
     assert_eq!(status, 200, "{approved}");
     let (_, built) = server
         .send(server.agent(
@@ -392,6 +396,92 @@ async fn exports_land_in_out_with_draft_names() {
     } else {
         eprintln!("typst is not on PATH; skipping the PDF preview check");
     }
+}
+
+#[tokio::test]
+async fn templates_are_previewed_before_acceptance_and_approval_needs_the_shown_hash() {
+    let server = start().await;
+    let (_, state) = server.send(server.person("GET", "/api/state", "")).await;
+    let type_hash = state["types"][0]["file_hash"].clone();
+    let body = json!({"hash": type_hash}).to_string();
+    let (status, _) = server
+        .send(server.person("POST", "/api/types/status-report/accept", &body))
+        .await;
+    assert_eq!(status, 200);
+    let template = &state["templates"][0];
+    assert_eq!(template["path"], "status-report.typ");
+    assert_eq!(template["state"], "new");
+    let hash = template["file_hash"].as_str().unwrap().to_string();
+
+    // A document's PDF waits for the template to be accepted.
+    let doc = json!({"type": "status-report", "title": "October", "fields": {"period": "2026-10"}})
+        .to_string();
+    let (_, created) = server
+        .send(server.person("POST", "/api/documents", &doc))
+        .await;
+    let id = created["result"]["id"].as_str().unwrap().to_string();
+    let (status, refused) = server
+        .send(server.person("GET", &format!("/api/documents/{id}/preview.pdf"), ""))
+        .await;
+    assert_eq!(status, 400, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("not been accepted")
+    );
+
+    // The preview renders exactly the bytes the person is about to accept.
+    let stale =
+        json!({"path": "status-report.typ", "hash": "stale", "type": "status-report"}).to_string();
+    let (status, _) = server
+        .send(server.person("POST", "/api/templates/preview", &stale))
+        .await;
+    assert_eq!(status, 409);
+    let (_, change) = server
+        .send(server.person("GET", "/api/templates/change?path=status-report.typ", ""))
+        .await;
+    assert_eq!(change["used_by"], json!(["status-report"]));
+    assert!(change["file_text"].as_str().unwrap().contains("data.json"));
+    if which("typst") {
+        for source in [json!(null), json!(id)] {
+            let mut body =
+                json!({"path": "status-report.typ", "hash": hash, "type": "status-report"});
+            if !source.is_null() {
+                body["document"] = source;
+            }
+            let (status, pdf) = server
+                .send(server.person("POST", "/api/templates/preview", &body.to_string()))
+                .await;
+            assert_eq!(status, 200, "{pdf}");
+            assert_eq!(pdf["pdf"], true);
+        }
+    }
+    let accept = json!({"path": "status-report.typ", "hash": hash}).to_string();
+    let (status, _) = server
+        .send(server.agent("POST", "/api/templates/accept", &accept))
+        .await;
+    assert_eq!(status, 403, "agents can't reach person routes");
+    let (status, _) = server
+        .send(server.person("POST", "/api/templates/accept", &accept))
+        .await;
+    assert_eq!(status, 200);
+
+    // Approval names the content hash the page showed.
+    let (_, view) = server
+        .send(server.person("GET", &format!("/api/documents/{id}"), ""))
+        .await;
+    let summary = json!({"version": 1, "fields": {"summary": "Quiet."}}).to_string();
+    server
+        .send(server.person("PUT", &format!("/api/documents/{id}"), &summary))
+        .await;
+    let stale = json!({"version": 2, "hash": view["content_hash"]}).to_string();
+    let (status, _) = server
+        .send(server.person("POST", &format!("/api/documents/{id}/approve"), &stale))
+        .await;
+    assert_eq!(status, 409);
+    let (status, approved) = server.approve(&id).await;
+    assert_eq!(status, 200, "{approved}");
 }
 
 fn which(binary: &str) -> bool {

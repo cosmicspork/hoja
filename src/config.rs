@@ -606,6 +606,26 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// JSON with every object's keys sorted, for hashing.
+pub fn canonical_json(value: &Value) -> String {
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                Value::Object(
+                    keys.into_iter()
+                        .map(|k| (k.clone(), sorted(&map[k])))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    sorted(value).to_string()
+}
+
 /// A type file as it is on disk right now.
 #[derive(Debug, Clone)]
 pub struct TypeFile {
@@ -648,6 +668,28 @@ impl Workspace {
 
     pub fn templates(&self) -> PathBuf {
         self.root.join("templates")
+    }
+
+    /// `samples/<type>.json`: invented content for previewing a template
+    /// before accepting it. Optional; hoja makes placeholders without it.
+    pub fn sample(&self, type_name: &str) -> anyhow::Result<Option<Value>> {
+        if !valid_type_name(type_name) {
+            bail!("invalid type name `{type_name}`");
+        }
+        let path = self.root.join("samples").join(format!("{type_name}.json"));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let body = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading samples/{type_name}.json"))?;
+        let value = serde_json::from_str(&body)
+            .with_context(|| format!("parsing samples/{type_name}.json"))?;
+        Ok(Some(value))
+    }
+
+    /// Every file under `templates/` as it is on disk now.
+    pub fn template_files(&self) -> anyhow::Result<Vec<crate::templates::DiskTemplate>> {
+        crate::templates::read_dir(&self.templates())
     }
 
     pub fn out(&self) -> PathBuf {
@@ -699,6 +741,14 @@ first_draft = "human"
 type = "text"
 required = true
 "#;
+
+    #[test]
+    fn canonical_json_ignores_key_order() {
+        let a = json!({"b": 1, "a": {"y": [1, {"d": 1, "c": 2}], "x": null}});
+        let b = json!({"a": {"x": null, "y": [1, {"c": 2, "d": 1}]}, "b": 1});
+        assert_ne!(a.to_string(), b.to_string());
+        assert_eq!(canonical_json(&a), canonical_json(&b));
+    }
 
     #[test]
     fn parses_a_minimal_type() {

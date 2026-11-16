@@ -6,6 +6,7 @@ use hoja::model::{
     UpdateRecord,
 };
 use hoja::store::{Store, StoreError};
+use hoja::templates::DiskTemplate;
 use serde_json::{Map, Value, json};
 
 const RESUME: &str = r#"
@@ -71,6 +72,89 @@ impl Fixture {
     fn files(&self) -> Vec<TypeFile> {
         Workspace::open(&self.root).unwrap().type_files().unwrap()
     }
+
+    fn templates(&self) -> Vec<DiskTemplate> {
+        Workspace::open(&self.root)
+            .unwrap()
+            .template_files()
+            .unwrap()
+    }
+
+    fn write_template(&self, path: &str, body: &str) {
+        let target = self.root.join("templates").join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, body).unwrap();
+    }
+
+    fn accept_template(&self, path: &str) -> Result<(), StoreError> {
+        let files = self.templates();
+        let hash = files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap()
+            .file
+            .hash
+            .clone();
+        self.store
+            .accept_template(&Actor::Person, path, &hash, &files)
+    }
+
+    /// An agent-drafted status report selecting one item, with the person's
+    /// summary, ready to approve.
+    fn report(&self) -> (hoja::model::Record, hoja::model::Document) {
+        let item = applied(
+            create(
+                &self.store,
+                &agent(),
+                "status-report",
+                "item",
+                json!({"text": "Shipped", "status": "done", "refs": ["!1"]}),
+            )
+            .unwrap(),
+        );
+        let doc = applied(
+            self.store
+                .create_document(
+                    &agent(),
+                    CreateDocument {
+                        type_name: "status-report".into(),
+                        title: "October".into(),
+                        fields: obj(json!({"period": "2026-10"})),
+                        note: String::new(),
+                    },
+                )
+                .unwrap(),
+        );
+        let doc = applied(
+            self.store
+                .select(
+                    &agent(),
+                    &doc.id,
+                    "done",
+                    SelectSection {
+                        version: doc.version,
+                        record_ids: vec![item.id.clone()],
+                        note: String::new(),
+                    },
+                )
+                .unwrap(),
+        );
+        let doc = applied(
+            self.store
+                .update_document(
+                    &Actor::Person,
+                    &doc.id,
+                    UpdateDocument {
+                        version: doc.version,
+                        title: None,
+                        fields: obj(json!({"summary": "A good month."})),
+                        note: String::new(),
+                    },
+                )
+                .unwrap(),
+        );
+        (item, doc)
+    }
 }
 
 fn agent() -> Actor {
@@ -129,6 +213,10 @@ fn accept(
             payload,
         },
     )
+}
+
+fn hash(store: &Store, id: &str) -> String {
+    store.resolve(id).unwrap().content_hash()
 }
 
 #[test]
@@ -286,7 +374,8 @@ fn agents_cannot_review_approve_delete_or_write_person_only_fields() {
             .unwrap(),
     );
     assert!(matches!(
-        f.store.approve_document(&agent(), &doc.id, doc.version, 0),
+        f.store
+            .approve_document(&agent(), &doc.id, doc.version, &hash(&f.store, &doc.id)),
         Err(StoreError::Refused(_))
     ));
     let summary = UpdateDocument {
@@ -699,12 +788,17 @@ fn approval_follows_content_and_lints_gate_it() {
 
     assert!(matches!(
         f.store
-            .approve_document(&Actor::Person, &doc.id, doc.version, 1),
-        Err(StoreError::Invalid(_))
+            .approve_document(&Actor::Person, &doc.id, doc.version, "not what was shown"),
+        Err(StoreError::Conflict)
     ));
     let doc = f
         .store
-        .approve_document(&Actor::Person, &doc.id, doc.version, 0)
+        .approve_document(
+            &Actor::Person,
+            &doc.id,
+            doc.version,
+            &hash(&f.store, &doc.id),
+        )
         .unwrap();
     assert!(doc.approved);
 
@@ -943,4 +1037,214 @@ fn reviewed_and_unique_lints() {
             .iter()
             .any(|m| m.contains("shares its claim with bullet \"Led it\""))
     );
+}
+
+fn edit(store: &Store, actor: &Actor, id: &str, fields: Value) -> Outcome<hoja::model::Record> {
+    let version = store.record(id).unwrap().version;
+    store
+        .update_record(
+            actor,
+            id,
+            UpdateRecord {
+                version,
+                fields: obj(fields),
+                note: String::new(),
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn approval_refuses_content_the_person_did_not_see() {
+    let f = Fixture::new();
+    let (item, doc) = f.report();
+    let shown = hash(&f.store, &doc.id);
+
+    // An agent edits the selected record after the page loaded. Record
+    // edits don't move the document's version, so only the hash catches it.
+    applied(edit(
+        &f.store,
+        &agent(),
+        &item.id,
+        json!({"text": "Shipped more"}),
+    ));
+    assert_eq!(f.store.document(&doc.id).unwrap().version, doc.version);
+    assert!(matches!(
+        f.store
+            .approve_document(&Actor::Person, &doc.id, doc.version, &shown),
+        Err(StoreError::Conflict)
+    ));
+
+    // Lints are checked against the content being approved, in the same transaction.
+    applied(edit(
+        &f.store,
+        &agent(),
+        &item.id,
+        json!({"refs": ["nope"]}),
+    ));
+    assert!(matches!(
+        f.store.approve_document(
+            &Actor::Person,
+            &doc.id,
+            doc.version,
+            &hash(&f.store, &doc.id)
+        ),
+        Err(StoreError::Invalid(_))
+    ));
+    applied(edit(&f.store, &agent(), &item.id, json!({"refs": ["!2"]})));
+    let approved = f
+        .store
+        .approve_document(
+            &Actor::Person,
+            &doc.id,
+            doc.version,
+            &hash(&f.store, &doc.id),
+        )
+        .unwrap();
+    assert!(approved.approved);
+}
+
+#[test]
+fn content_hash_ignores_stored_key_order() {
+    let f = Fixture::new();
+    let (item, doc) = f.report();
+    let before = hash(&f.store, &doc.id);
+    f.store
+        .approve_document(&Actor::Person, &doc.id, doc.version, &before)
+        .unwrap();
+
+    // Store the same fields in reverse order, as a type file that reorders
+    // its fields would leave them after the next write.
+    let db = rusqlite::Connection::open(f.root.join("hoja.sqlite3")).unwrap();
+    let raw: String = db
+        .query_row(
+            "SELECT fields_json FROM records WHERE id=?1",
+            [&item.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let fields: Map<String, Value> = serde_json::from_str(&raw).unwrap();
+    let reversed: Map<String, Value> = fields.into_iter().rev().collect();
+    let reordered = Value::Object(reversed).to_string();
+    assert_ne!(raw, reordered);
+    db.execute(
+        "UPDATE records SET fields_json=?2 WHERE id=?1",
+        rusqlite::params![item.id, reordered],
+    )
+    .unwrap();
+
+    assert_eq!(hash(&f.store, &doc.id), before);
+    assert!(f.store.document(&doc.id).unwrap().approved);
+}
+
+#[test]
+fn templates_take_effect_only_once_accepted_and_gate_approval() {
+    let f = Fixture::new();
+    f.write_template(
+        "status-report.typ",
+        "#import \"parts/style.typ\": *\nreport",
+    );
+    f.write_template("parts/style.typ", "#let accent = red");
+    f.write_template("resume.typ", "resume");
+    let states: Vec<(String, String)> = f
+        .store
+        .template_statuses(&f.templates())
+        .unwrap()
+        .into_iter()
+        .map(|t| (t.path, t.state))
+        .collect();
+    assert!(states.iter().all(|(_, s)| s == "new"), "{states:?}");
+
+    let config = f.store.config("status-report").unwrap();
+    assert!(
+        f.store.template_closure(&config).is_err(),
+        "nothing accepted yet"
+    );
+    for path in ["status-report.typ", "parts/style.typ", "resume.typ"] {
+        f.accept_template(path).unwrap();
+    }
+    let (_, files) = f.store.template_closure(&config).unwrap();
+    assert_eq!(
+        files.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["parts/style.typ", "status-report.typ"]
+    );
+    let statuses = f.store.template_statuses(&f.templates()).unwrap();
+    let style = statuses
+        .iter()
+        .find(|t| t.path == "parts/style.typ")
+        .unwrap();
+    assert_eq!(style.used_by, vec!["status-report".to_string()]);
+
+    let (_, doc) = f.report();
+    f.store
+        .approve_document(
+            &Actor::Person,
+            &doc.id,
+            doc.version,
+            &hash(&f.store, &doc.id),
+        )
+        .unwrap();
+
+    // Editing a file on disk changes nothing until the person accepts it.
+    f.write_template("parts/style.typ", "#let accent = blue");
+    let statuses = f.store.template_statuses(&f.templates()).unwrap();
+    assert_eq!(
+        statuses
+            .iter()
+            .find(|t| t.path == "parts/style.typ")
+            .unwrap()
+            .state,
+        "changed"
+    );
+    assert!(f.store.document(&doc.id).unwrap().approved);
+    let (_, files) = f.store.template_closure(&config).unwrap();
+    assert_eq!(
+        files["parts/style.typ"].body.as_slice(),
+        b"#let accent = red"
+    );
+
+    // Another type's template doesn't touch this document's approval...
+    f.write_template("resume.typ", "resume v2");
+    f.accept_template("resume.typ").unwrap();
+    assert!(f.store.document(&doc.id).unwrap().approved);
+    // ...but accepting a change to a file its template reaches returns it to draft.
+    f.accept_template("parts/style.typ").unwrap();
+    let doc = f.store.document(&doc.id).unwrap();
+    assert!(!doc.approved);
+    assert!(doc.approved_at.is_some());
+
+    // Only the person accepts, only the exact contents shown, and never a reserved name.
+    let files = f.templates();
+    let resume = files.iter().find(|t| t.path == "resume.typ").unwrap();
+    assert!(matches!(
+        f.store
+            .accept_template(&agent(), "resume.typ", &resume.file.hash, &files),
+        Err(StoreError::Refused(_))
+    ));
+    assert!(matches!(
+        f.store
+            .accept_template(&Actor::Person, "resume.typ", "stale", &files),
+        Err(StoreError::Conflict)
+    ));
+    f.write_template("hoja.typ", "#let md(..args) = []");
+    let files = f.templates();
+    let shadow = files.iter().find(|t| t.path == "hoja.typ").unwrap();
+    assert!(shadow.error.is_some());
+    assert!(matches!(
+        f.store
+            .accept_template(&Actor::Person, "hoja.typ", &shadow.file.hash, &files),
+        Err(StoreError::Invalid(_))
+    ));
+}
+
+#[test]
+fn accepted_templates_survive_a_restart() {
+    let f = Fixture::new();
+    f.write_template("status-report.typ", "report");
+    f.accept_template("status-report.typ").unwrap();
+    let reopened = Store::init(&f.root.join("hoja.sqlite3")).unwrap();
+    let config = reopened.config("status-report").unwrap();
+    let (entry, files) = reopened.template_closure(&config).unwrap();
+    assert_eq!(entry, "status-report.typ");
+    assert_eq!(files[&entry].body.as_slice(), b"report");
 }

@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import FieldInput from './FieldInput.svelte';
   import Revisions from './Revisions.svelte';
-  import { api, message, type DocumentView, type Format, type HojaRecord, type TypeConfig } from './lib/api';
+  import { ApiError, api, message, type DocumentView, type Format, type HojaRecord, type TypeConfig } from './lib/api';
   import { eligible, formOf, href, move, patch, recordLabel, titleOf, when } from './lib/views';
 
   let { id, config, onchange }: { id: string; config: TypeConfig; onchange: () => void } = $props();
@@ -43,8 +43,9 @@
     } catch (e) { error = message(e, 'Could not load the document.'); }
   }
 
-  // Runs a change, then reloads. A string result is shown as a notice.
-  async function act(operation: () => Promise<unknown>) {
+  // Runs a change, then reloads. A string result is shown as a notice. A
+  // refused approval also reloads, so the person sees what changed.
+  async function act(operation: () => Promise<unknown>, reloadOnError = false) {
     busy = true;
     error = '';
     notice = '';
@@ -53,7 +54,13 @@
       notice = typeof result === 'string' ? result : '';
       await load();
       onchange();
-    } catch (e) { error = message(e, 'That did not work.'); }
+    } catch (e) {
+      error = message(e, 'That did not work.');
+      if (reloadOnError) {
+        if (e instanceof ApiError && e.code === 'conflict') error = 'This changed since the page loaded, so it was not approved. Review it again below.';
+        await load();
+      }
+    }
     finally { busy = false; }
   }
 
@@ -81,13 +88,16 @@
     act(() => api.select(d.id, section, d.version, selection[section] ?? []));
   }
 
+  // Approves exactly what this page shows: the server compares the content
+  // hash it was loaded with and refuses if anything changed since.
   function approve() {
-    if (!doc) return;
+    if (!doc || !view) return;
     const d = doc;
+    const hash = view.content_hash;
     act(async () => {
-      await api.approve(d.id, d.version);
+      await api.approve(d.id, d.version, hash);
       return 'Approved. Any later change returns it to draft.';
-    });
+    }, true);
   }
 
   function exportAs(format: Format) {

@@ -14,7 +14,7 @@
   let documentType = $state<string | null>(null);
 
   const accepted = $derived((app?.types ?? []).filter(t => t.config));
-  const pendingTypes = $derived((app?.types ?? []).filter(t => t.state === 'new' || t.state === 'changed').length);
+  const pendingTypes = $derived([...(app?.types ?? []), ...(app?.templates ?? [])].filter(t => t.state === 'new' || t.state === 'changed').length);
 
   async function refresh() {
     try {
@@ -96,7 +96,7 @@
     {:else if route.view === 'approvals'}
       <ApprovalsView types={app.types} onchange={refresh} />
     {:else if route.view === 'types'}
-      <TypesView types={app.types} typesError={app.types_error} onchange={refresh} />
+      <TypesView types={app.types} typesError={app.types_error} templates={app.templates} templatesError={app.templates_error} onchange={refresh} />
     {/if}
   </main>
 </div>

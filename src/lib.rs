@@ -6,3 +6,4 @@ pub mod lint;
 pub mod model;
 pub mod render;
 pub mod store;
+pub mod templates;

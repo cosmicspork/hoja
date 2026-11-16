@@ -35,11 +35,33 @@ export interface TypeStatus {
   config: TypeConfig | null;
 }
 export interface TypeChange { name: string; file_hash: string | null; file_body: string | null; accepted_body: string | null; error: string | null }
+export interface TemplateStatus {
+  path: string;
+  state: TypeState;
+  file_hash: string | null;
+  accepted_hash: string | null;
+  accepted_at: string | null;
+  error: string | null;
+  used_by: string[];
+}
+export interface TemplateChange {
+  path: string;
+  file_hash: string | null;
+  file_text: string | null;
+  accepted_text: string | null;
+  binary: boolean;
+  file_size: number | null;
+  accepted_size: number | null;
+  error: string | null;
+  used_by: string[];
+}
 export interface AppState {
   owner: string | null;
   workspace: string;
   types: TypeStatus[];
   types_error: string | null;
+  templates: TemplateStatus[];
+  templates_error: string | null;
   pending_approvals: number;
 }
 
@@ -87,6 +109,8 @@ export interface HojaDocument {
 export interface LintFinding { level: 'error' | 'warn'; message: string; record_id: string | null; field: string | null }
 export interface DocumentView {
   document: HojaDocument;
+  /** What approving this view approves; the server refuses it if anything changed since. */
+  content_hash: string;
   lints: LintFinding[];
   blocking: number;
   exports: { format: Format; filename: string }[];
@@ -159,6 +183,10 @@ export const api = {
   state: () => request<AppState>('/api/state'),
   typeChange: (name: string) => request<TypeChange>(`/api/types/${id(name)}/change`),
   acceptType: (name: string, hash: string) => request<unknown>(`/api/types/${id(name)}/accept`, json('POST', { hash })),
+  templateChange: (path: string) => request<TemplateChange>(`/api/templates/change${query({ path })}`),
+  acceptTemplate: (path: string, hash: string) => request<unknown>('/api/templates/accept', json('POST', { path, hash })),
+  templatePreview: async (path: string, hash: string, type: string, document?: string) =>
+    (await send('/api/templates/preview', json('POST', { path, hash, type, ...(document ? { document } : {}) }))).blob(),
 
   records: (type?: string, kind?: string) => request<HojaRecord[]>(`/api/records${query({ type, kind })}`),
   record: (rid: string) => request<{ record: HojaRecord; revisions: Revision[] }>(`/api/records/${id(rid)}`),
@@ -173,7 +201,7 @@ export const api = {
   updateDocument: (did: string, version: number, title: string, fields: Patch) => applied<HojaDocument>(`/api/documents/${id(did)}`, json('PUT', { version, title, fields })),
   select: (did: string, section: string, version: number, record_ids: string[]) =>
     applied<HojaDocument>(`/api/documents/${id(did)}/sections/${id(section)}`, json('PUT', { version, record_ids })),
-  approve: (did: string, version: number) => request<HojaDocument>(`/api/documents/${id(did)}/approve`, json('POST', { version })),
+  approve: (did: string, version: number, hash: string) => request<HojaDocument>(`/api/documents/${id(did)}/approve`, json('POST', { version, hash })),
   preview: async (did: string) => (await send(`/api/documents/${id(did)}/preview.pdf`)).blob(),
   exportDocument: (did: string, format: Format) => request<{ path: string; filename: string; approved: boolean }>(`/api/documents/${id(did)}/export`, json('POST', { format })),
 

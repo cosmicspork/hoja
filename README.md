@@ -15,9 +15,10 @@ These are in code, not configuration. A type file can tighten them and has no wa
 - **The first draft belongs to whoever the type says.** In a `first_draft = "human"` type (a resume), agents can't create records or documents; they can only suggest changes to what the person wrote. In a `first_draft = "agent"` type (a status report), agents write unreviewed records and drafts directly.
 - **Settled content needs a card.** Once a record is reviewed or a document has been approved, an agent's change becomes a card for the person, even in an agent-drafted type. `agent_direct = false` sends every agent write through a card.
 - **Changes reset review.** Editing a record clears its reviewed mark. A document is approved only while its content matches what the person approved, so any later edit to it, or to a record it selects, returns it to draft. Exports of drafts are named `-DRAFT`.
-- **Approval waits on lints.** A document with error-level lint findings can't be approved.
+- **Approval covers what the person saw.** The page sends the content hash it showed. If anything changed since, a selected record, the template, the type's layout, approval is refused and the page reloads. The content hash ignores the order fields are stored in.
+- **Approval waits on lints.** A document with error-level lint findings can't be approved. Lints are checked against the content being approved, in the same transaction.
 - **Cards apply to what the agent saw.** A card records the version the agent read. If the fields it touches changed since, it is stale and can only be rejected or sent back.
-- **Type files need the person's acceptance.** hoja runs on the accepted copy of each `types/*.toml`. A new or edited file shows its diff in the UI and takes effect only when the person accepts those exact contents.
+- **Type files and templates need the person's acceptance.** hoja runs on the accepted copy of each `types/*.toml` and of every file under `templates/`. A new or edited file shows its diff in the UI (a template also renders a preview) and takes effect only when the person accepts those exact contents. A document's content hash includes every accepted template file its template reaches, so accepting a template change returns the documents it renders to draft, and editing a file on disk changes nothing until it is accepted.
 
 ### Cards
 
@@ -55,7 +56,8 @@ A workspace is a directory:
 ```text
 hoja.toml          owner = "Your Name"   (used in export file names)
 types/*.toml       document types
-templates/*.typ    Typst templates
+templates/         Typst templates and anything they include (images, shared .typ files)
+samples/*.json     optional invented content for previewing a template before accepting it
 fonts/             optional; passed to Typst with --font-path
 hoja.sqlite3       the source of truth (created on first run, mode 0600)
 out/               exports
@@ -76,7 +78,7 @@ A type declares record kinds and their fields, the document's own fields, its se
 
 ### Templates
 
-hoja compiles the type's template in a scratch directory holding a copy of `templates/` and a `data.json`:
+hoja compiles the type's template in a scratch directory holding `data.json` and the accepted copies of the template files it reaches: the entry file, then any accepted file named by a string literal in a reachable `.typ` file (`#import "parts/style.typ"`, `image("logo.png")`), resolved the way Typst resolves paths. Nothing else is there, so a template can't read the workspace, the database, or a file nobody accepted, and a path built at runtime fails to compile.
 
 ```typst
 #let data = json("data.json")
@@ -85,7 +87,9 @@ hoja compiles the type's template in a scratch directory holding a copy of `temp
 // data.sections.<name>.groups: ({ref, items}) when the section has group_by
 ```
 
-Templates never see the workspace or the database. Compile errors show in the UI and the CLI as Typst prints them. Markdown and HTML exports are built in from the sections' `item` patterns.
+`hoja.typ` and `data.json` are reserved names. hoja supplies `hoja.typ` itself (see Markdown below); a file in a subdirectory imports it as `"/hoja.typ"`. Compile errors show in the UI and the CLI as Typst prints them. Markdown and HTML exports are built in from the sections' `item` patterns.
+
+Reviewing a template under **Types** shows its diff and renders a preview with that file swapped in: from `samples/<type>.json` when it exists (`{"title", "fields", "sections": {"<name>": [{"fields": {...}}]}}`), from placeholders when it doesn't, or from one of your documents.
 
 ## For agents: the CLI
 

@@ -1,14 +1,17 @@
 //! Rendering: the data a template sees, Typst for PDF, and the built-in
 //! Markdown/HTML export for report types.
 
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use crate::config::{FieldType, Format, TypeConfig, placeholders};
-use crate::model::Record;
-use crate::store::Resolved;
+use crate::config::{FieldConfig, FieldType, Format, TypeConfig, placeholders};
+use crate::model::{Document, Record};
+use crate::store::{Resolved, ResolvedSection};
+use crate::templates::TemplateFile;
 
 const TYPST_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -52,6 +55,139 @@ fn groups<'a>(resolved: &'a Resolved, name: &str) -> Vec<(Option<&'a Record>, Ve
         }
     }
     out
+}
+
+/// Placeholder content for a field, shaped like a real value.
+fn placeholder(name: &str, field: &FieldConfig, index: usize) -> Option<Value> {
+    let words = name.replace('_', " ");
+    Some(match field.ty {
+        FieldType::String => Value::String(format!("Sample {words} {}", index + 1)),
+        FieldType::Text => Value::String(format!(
+            "Sample {words}, with **emphasis** and a list:\n\n- a first point\n- a second point"
+        )),
+        FieldType::Tags => json!(["sample"]),
+        FieldType::List => json!([format!("first {words}"), format!("second {words}")]),
+        FieldType::Enum => Value::String(
+            field
+                .options
+                .get(index % field.options.len().max(1))?
+                .clone(),
+        ),
+        FieldType::Date => Value::String(format!("2026-{:02}-15", (index % 12) + 1)),
+        FieldType::Bool => Value::Bool(true),
+        FieldType::Ref => return None,
+    })
+}
+
+fn placeholders_for(
+    fields: &indexmap::IndexMap<String, FieldConfig>,
+    index: usize,
+) -> Map<String, Value> {
+    fields
+        .iter()
+        .filter_map(|(name, field)| placeholder(name, field, index).map(|v| (name.clone(), v)))
+        .collect()
+}
+
+/// A document built from `samples/<type>.json` (`{"title", "fields",
+/// "sections": {"<name>": [{"fields", "reviewed"?}]}}`), or from placeholders
+/// when there is no sample, for previewing a template before accepting it.
+pub fn sample(
+    type_name: &str,
+    config: Arc<TypeConfig>,
+    configs: HashMap<String, Arc<TypeConfig>>,
+    sample: Option<&Value>,
+) -> Resolved {
+    let object = |v: Option<&Value>| v.and_then(Value::as_object).cloned();
+    let fields = object(sample.and_then(|s| s.get("fields")))
+        .unwrap_or_else(|| placeholders_for(&config.document.fields, 0));
+    let mut sections = Vec::new();
+    for (si, section) in config.document.sections.iter().enumerate() {
+        let source = type_name;
+        let kind = configs.get(source).and_then(|c| c.kind(&section.kind));
+        let given = sample
+            .and_then(|s| s.get("sections"))
+            .and_then(|s| s.get(&section.name))
+            .and_then(Value::as_array);
+        let items: Vec<(Map<String, Value>, bool)> = match given {
+            Some(items) => items
+                .iter()
+                .map(|i| {
+                    (
+                        object(i.get("fields")).unwrap_or_default(),
+                        i["reviewed"].as_bool().unwrap_or(true),
+                    )
+                })
+                .collect(),
+            None => match kind {
+                Some(kind) => (0..2)
+                    .map(|i| {
+                        let mut fields = placeholders_for(&kind.fields, si + i);
+                        for (field, value) in &section.filter {
+                            fields.insert(field.clone(), Value::String(value.clone()));
+                        }
+                        (fields, true)
+                    })
+                    .collect(),
+                None => Vec::new(),
+            },
+        };
+        let records = items
+            .into_iter()
+            .enumerate()
+            .map(|(i, (fields, reviewed))| Record {
+                id: format!("sample-{}-{}", section.name, i + 1),
+                type_name: source.to_string(),
+                kind: section.kind.clone(),
+                fields,
+                reviewed,
+                reviewed_at: None,
+                version: 1,
+                created_at: String::new(),
+                updated_at: String::new(),
+                deleted: false,
+                created_by: None,
+                updated_by: None,
+            })
+            .collect();
+        sections.push(ResolvedSection {
+            name: section.name.clone(),
+            records,
+        });
+    }
+    let title = sample
+        .and_then(|s| s.get("title"))
+        .and_then(Value::as_str)
+        .map(String::from)
+        .unwrap_or_else(|| {
+            config
+                .title
+                .clone()
+                .unwrap_or_else(|| type_name.to_string())
+        });
+    let document = Document {
+        id: "sample".into(),
+        type_name: type_name.into(),
+        title,
+        fields,
+        sections: Vec::new(),
+        approved: false,
+        approved_at: None,
+        version: 1,
+        created_at: String::new(),
+        updated_at: String::new(),
+        created_by: None,
+        updated_by: None,
+    };
+    Resolved {
+        config,
+        configs,
+        document,
+        sections,
+        refs: HashMap::new(),
+        missing: Vec::new(),
+        template: Value::Null,
+    }
 }
 
 /// What a template reads as `json("data.json")`.
@@ -338,52 +474,41 @@ impl std::fmt::Display for RenderError {
     }
 }
 
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else if kind.is_file() {
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
-}
-
 pub struct Typst {
     pub binary: PathBuf,
-    pub templates: PathBuf,
     /// Extra fonts, used when the directory exists.
     pub fonts: PathBuf,
 }
 
 impl Typst {
-    /// Compiles the type's template against `data` in a scratch root holding
-    /// a copy of `templates/` and `data.json`, so templates can't reach the
-    /// workspace or its database.
-    pub async fn pdf(&self, config: &TypeConfig, data: &Value) -> Result<Vec<u8>, RenderError> {
-        let template = config.template.as_deref().ok_or(RenderError::NoTemplate)?;
+    /// Compiles `entry` against `data` in a scratch root holding only the
+    /// given (accepted) template files and `data.json`, so a template can't
+    /// reach the workspace, its database, or a template file nobody accepted.
+    pub async fn pdf(
+        &self,
+        files: &BTreeMap<String, TemplateFile>,
+        entry: &str,
+        data: &Value,
+    ) -> Result<Vec<u8>, RenderError> {
         let io = |e: std::io::Error| RenderError::Io(e.to_string());
-        let root = tempfile::tempdir().map_err(io)?;
-        copy_dir(&self.templates, root.path())
-            .map_err(|e| RenderError::Io(format!("copying templates/: {e}")))?;
-        let entry = root.path().join(template);
-        if !entry.is_file() {
-            return Err(RenderError::Io(format!(
-                "templates/{template} does not exist"
-            )));
+        let scratch = tempfile::tempdir().map_err(io)?;
+        let root = scratch.path().join("root");
+        for (path, file) in files {
+            let target = root.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(io)?;
+            }
+            std::fs::write(&target, file.body.as_slice()).map_err(io)?;
         }
-        std::fs::write(root.path().join("data.json"), data.to_string()).map_err(io)?;
-        let output = root.path().join("hoja-out.pdf");
+        std::fs::create_dir_all(&root).map_err(io)?;
+        std::fs::write(root.join("data.json"), data.to_string()).map_err(io)?;
+        let output = scratch.path().join("out.pdf");
         let mut command = tokio::process::Command::new(&self.binary);
         command
             .arg("compile")
             .arg("--root")
-            .arg(root.path())
-            .arg(&entry)
+            .arg(&root)
+            .arg(root.join(entry))
             .arg(&output)
             .kill_on_drop(true);
         if self.fonts.is_dir() {
@@ -395,7 +520,7 @@ impl Typst {
             .map_err(|e| RenderError::Io(format!("running {}: {e}", self.binary.display())))?;
         if !run.status.success() {
             let stderr = String::from_utf8_lossy(&run.stderr);
-            let root_text = root.path().display().to_string();
+            let root_text = root.display().to_string();
             return Err(RenderError::Compile(
                 stderr.replace(&root_text, "templates").trim().to_string(),
             ));

@@ -189,7 +189,6 @@ async fn serve(workspace: PathBuf, port: u16, typst: PathBuf) -> Result<()> {
         store,
         typst: Arc::new(Typst {
             binary: typst,
-            templates: workspace.templates(),
             fonts: workspace.root.join("fonts"),
         }),
         workspace: Arc::new(workspace),

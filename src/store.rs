@@ -7,18 +7,24 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::config::{FieldType, TypeConfig, TypeFile, apply_patch, sha256_hex};
+use crate::config::{
+    FieldType, KindConfig, TypeConfig, TypeFile, apply_patch, canonical_json, sha256_hex,
+};
 use crate::gates::{self, Actor, Author, Op, Route, Write};
+use crate::lint;
 use crate::model::{
     Action, Approval, Attribution, CreateDocument, CreateRecord, Decide, Decision, Document,
-    Outcome, Record, Revision, Section, SelectSection, TypeChange, TypeStatus, UpdateDocument,
-    UpdateRecord,
+    Outcome, Record, Revision, Section, SelectSection, TemplateChange, TemplateStatus, TypeChange,
+    TypeStatus, UpdateDocument, UpdateRecord,
 };
+use crate::templates::{self, DiskTemplate, TemplateFile, TemplateSet};
 
 pub struct Store {
     connection: Mutex<Connection>,
     /// Accepted type configs. Only `accept_type` changes this.
     types: RwLock<HashMap<String, Arc<TypeConfig>>>,
+    /// Accepted template files. Only `accept_template` changes this.
+    templates: RwLock<TemplateSet>,
 }
 
 #[derive(Debug)]
@@ -64,6 +70,9 @@ CREATE TABLE revisions(id INTEGER PRIMARY KEY AUTOINCREMENT, target_kind TEXT NO
 CREATE TABLE approvals(id TEXT PRIMARY KEY, request_key TEXT NOT NULL, action TEXT NOT NULL CHECK(action IN ('record.create','record.update','document.create','document.update','document.select')), type TEXT NOT NULL, target_id TEXT, base_version INTEGER, payload_json TEXT NOT NULL, agent TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', state TEXT NOT NULL CHECK(state IN ('pending','accepted','rejected','changes_requested')), reason TEXT, edited INTEGER NOT NULL DEFAULT 0 CHECK(edited IN (0,1)), result_json TEXT, created_at TEXT NOT NULL, decided_at TEXT);
 CREATE UNIQUE INDEX approvals_pending_key ON approvals(request_key) WHERE state='pending';
 CREATE INDEX approvals_state ON approvals(state, created_at);
+", "
+CREATE TABLE template_files(path TEXT PRIMARY KEY, accepted_hash TEXT NOT NULL, accepted_body BLOB NOT NULL, accepted_at TEXT NOT NULL);
+ALTER TABLE documents ADD COLUMN approved_content TEXT;
 "];
 
 /// How a write is attributed in its revision.
@@ -97,12 +106,16 @@ impl<'a> Attrib<'a> {
 /// A document with its selected records resolved, for linting, hashing and rendering.
 pub struct Resolved {
     pub config: Arc<TypeConfig>,
+    /// Every accepted type a selected record belongs to, including the document's own.
+    pub configs: HashMap<String, Arc<TypeConfig>>,
     pub document: Document,
     pub sections: Vec<ResolvedSection>,
     /// Records named by `group_by` refs, by id.
     pub refs: HashMap<String, Record>,
     /// Selected record ids that were deleted since, by section.
     pub missing: Vec<(String, String)>,
+    /// The accepted template files that render this document, by hash.
+    pub template: Value,
 }
 
 pub struct ResolvedSection {
@@ -111,9 +124,18 @@ pub struct ResolvedSection {
 }
 
 impl Resolved {
-    /// The content the person approves: title, fields, and every selected
-    /// and referenced record's fields, in order.
-    pub fn content_hash(&self) -> String {
+    /// The kind a record belongs to, in whichever type it comes from.
+    pub fn kind_config(&self, record: &Record) -> Option<&KindConfig> {
+        self.configs
+            .get(&record.type_name)
+            .unwrap_or(&self.config)
+            .kind(&record.kind)
+    }
+
+    /// The content the person approves: title, fields, every selected and
+    /// referenced record's fields in order, the type's layout (section and
+    /// field titles, item patterns), and the template files that render it.
+    pub fn content(&self) -> Value {
         let sections: Vec<Value> = self
             .sections
             .iter()
@@ -130,13 +152,29 @@ impl Resolved {
             .into_iter()
             .map(|(id, r)| json!({"id": id, "fields": r.fields}))
             .collect();
-        let content = json!({
+        let config = &self.config;
+        let layout = json!({
+            "title": config.title,
+            "sections": config.document.sections.iter().map(|s| json!({
+                "name": s.name, "title": s.title, "kind": s.kind,
+                "item": s.item, "group_by": s.group_by,
+            })).collect::<Vec<_>>(),
+            "fields": config.document.fields.iter().map(|(n, f)| (n.clone(), json!(f.title))).collect::<Map<_, _>>(),
+        });
+        json!({
             "title": self.document.title,
             "fields": self.document.fields,
             "sections": sections,
             "refs": refs,
-        });
-        sha256_hex(content.to_string().as_bytes())
+            "layout": layout,
+            "template": self.template,
+        })
+    }
+
+    /// Hashes the content with object keys sorted, so storing the same fields
+    /// in another order can't change it.
+    pub fn content_hash(&self) -> String {
+        sha256_hex(canonical_json(&self.content()).as_bytes())
     }
 }
 
@@ -169,9 +207,22 @@ impl Store {
                 types.insert(name, Arc::new(config));
             }
         }
+        let mut accepted_templates = std::collections::BTreeMap::new();
+        {
+            let mut statement =
+                connection.prepare("SELECT path, accepted_body FROM template_files")?;
+            let rows = statement.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                let (path, body) = row?;
+                accepted_templates.insert(path, TemplateFile::new(body));
+            }
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             types: RwLock::new(types),
+            templates: RwLock::new(TemplateSet::new(accepted_templates)),
         })
     }
 
@@ -287,6 +338,147 @@ impl Store {
             .write()
             .map_err(|_| StoreError::Internal("type lock poisoned".into()))?
             .insert(name.into(), Arc::new(config));
+        Ok(())
+    }
+
+    // ---- template files ---------------------------------------------------
+
+    pub fn template_set(&self) -> Result<TemplateSet, StoreError> {
+        Ok(self
+            .templates
+            .read()
+            .map_err(|_| StoreError::Internal("template lock poisoned".into()))?
+            .clone())
+    }
+
+    /// The accepted files that render documents of this type.
+    pub fn template_closure(
+        &self,
+        config: &TypeConfig,
+    ) -> Result<(String, std::collections::BTreeMap<String, TemplateFile>), StoreError> {
+        let entry = config.template.as_deref().ok_or_else(|| {
+            StoreError::Invalid("this type has no template, so it has no PDF".into())
+        })?;
+        let files = self
+            .template_set()?
+            .closure(entry)
+            .map_err(StoreError::Invalid)?;
+        Ok((entry.to_string(), files))
+    }
+
+    /// Types whose template reaches `path` once the file on disk is accepted.
+    fn template_users(
+        &self,
+        path: &str,
+        disk: Option<&DiskTemplate>,
+    ) -> Result<Vec<String>, StoreError> {
+        let set = match disk {
+            Some(d) => self.template_set()?.with(path, d.file.clone()),
+            None => self.template_set()?,
+        };
+        Ok(self
+            .accepted_types()?
+            .into_iter()
+            .filter(|(_, c)| {
+                c.template
+                    .as_deref()
+                    .is_some_and(|entry| templates::reaches(&set, entry, path))
+            })
+            .map(|(name, _)| name)
+            .collect())
+    }
+
+    pub fn template_statuses(
+        &self,
+        files: &[DiskTemplate],
+    ) -> Result<Vec<TemplateStatus>, StoreError> {
+        let accepted = accepted_template_rows(&*self.lock()?)?;
+        let mut paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+        paths.extend(accepted.keys().cloned());
+        paths.sort();
+        paths.dedup();
+        paths
+            .into_iter()
+            .map(|path| {
+                let file = files.iter().find(|f| f.path == path);
+                let row = accepted.get(&path);
+                let state = match (file, row) {
+                    (Some(f), Some(r)) if f.file.hash == r.0 => "accepted",
+                    (Some(_), Some(_)) => "changed",
+                    (Some(_), None) => "new",
+                    (None, _) => "missing",
+                };
+                Ok(TemplateStatus {
+                    used_by: self.template_users(&path, file)?,
+                    state: state.into(),
+                    file_hash: file.map(|f| f.file.hash.clone()),
+                    accepted_hash: row.map(|r| r.0.clone()),
+                    accepted_at: row.map(|r| r.1.clone()),
+                    error: file.and_then(|f| f.error.clone()),
+                    path,
+                })
+            })
+            .collect()
+    }
+
+    pub fn template_change(
+        &self,
+        path: &str,
+        files: &[DiskTemplate],
+    ) -> Result<TemplateChange, StoreError> {
+        let file = files.iter().find(|f| f.path == path);
+        let accepted = self.template_set()?;
+        let accepted = accepted
+            .get(path)
+            .filter(|_| path != templates::BUILTIN_PATH);
+        if file.is_none() && accepted.is_none() {
+            return Err(StoreError::NotFound);
+        }
+        let text = |f: &TemplateFile| String::from_utf8(f.body.to_vec()).ok();
+        Ok(TemplateChange {
+            path: path.into(),
+            file_hash: file.map(|f| f.file.hash.clone()),
+            file_text: file.and_then(|f| text(&f.file)),
+            accepted_text: accepted.and_then(text),
+            binary: file.is_some_and(|f| text(&f.file).is_none())
+                || accepted.is_some_and(|f| text(f).is_none()),
+            file_size: file.map(|f| f.file.body.len()),
+            accepted_size: accepted.map(|f| f.body.len()),
+            error: file.and_then(|f| f.error.clone()),
+            used_by: self.template_users(path, file)?,
+        })
+    }
+
+    /// Accepts the template file whose contents hash to `hash`.
+    pub fn accept_template(
+        &self,
+        actor: &Actor,
+        path: &str,
+        hash: &str,
+        files: &[DiskTemplate],
+    ) -> Result<(), StoreError> {
+        gates::person_only_action(actor, "accept a template").map_err(StoreError::Refused)?;
+        let file = files
+            .iter()
+            .find(|f| f.path == path)
+            .ok_or(StoreError::NotFound)?;
+        if let Some(error) = &file.error {
+            return Err(StoreError::Invalid(error.clone()));
+        }
+        if file.file.hash != hash {
+            return Err(StoreError::Conflict);
+        }
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO template_files(path, accepted_hash, accepted_body, accepted_at) VALUES(?1,?2,?3,?4) ON CONFLICT(path) DO UPDATE SET accepted_hash=excluded.accepted_hash, accepted_body=excluded.accepted_body, accepted_at=excluded.accepted_at",
+                params![path, file.file.hash, file.file.body.as_slice(), now_utc()],
+            )
+            .map_err(internal)?;
+        self.templates
+            .write()
+            .map_err(|_| StoreError::Internal("template lock poisoned".into()))?
+            .insert(path, file.file.clone());
         Ok(())
     }
 
@@ -585,12 +777,17 @@ impl Store {
                 records,
             });
         }
+        let mut configs = HashMap::new();
+        configs.insert(document.type_name.clone(), config.clone());
+        let template = self.template_set()?.fingerprint(config.template.as_deref());
         let mut resolved = Resolved {
             config,
+            configs,
             document: document.clone(),
             sections,
             refs,
             missing,
+            template,
         };
         document.approved = approved_hash.is_some_and(|h| h == resolved.content_hash());
         resolved.document = document;
@@ -776,25 +973,22 @@ impl Store {
     }
 
     /// Records the person's approval of the document's current content.
-    /// `blocking` is the number of error-level lint findings, which must be zero.
+    /// `hash` is the content hash the person was shown: if anything changed
+    /// since, including a selected record or the template, approval is
+    /// refused. Lints are checked against the same content in the same
+    /// transaction.
     pub fn approve_document(
         &self,
         actor: &Actor,
         id: &str,
         version: i64,
-        blocking: usize,
+        hash: &str,
     ) -> Result<Document, StoreError> {
         gates::person_only_action(actor, "approve documents").map_err(StoreError::Refused)?;
-        if blocking > 0 {
-            return Err(StoreError::Invalid(format!(
-                "fix {blocking} lint error{} before approving",
-                if blocking == 1 { "" } else { "s" }
-            )));
-        }
         let mut connection = self.lock()?;
         let tx = connection.transaction().map_err(internal)?;
         let resolved = self.resolve_in(&tx, id)?;
-        if resolved.document.version != version {
+        if resolved.document.version != version || resolved.content_hash() != hash {
             return Err(StoreError::Conflict);
         }
         if !resolved.missing.is_empty() {
@@ -802,10 +996,16 @@ impl Store {
                 "remove deleted records from the selection first".into(),
             ));
         }
-        let hash = resolved.content_hash();
+        let blocking = lint::errors(&lint::lint(&resolved));
+        if blocking > 0 {
+            return Err(StoreError::Invalid(format!(
+                "fix {blocking} lint error{} before approving",
+                if blocking == 1 { "" } else { "s" }
+            )));
+        }
         tx.execute(
-            "UPDATE documents SET approved_hash=?2, approved_at=?3, version=version+1 WHERE id=?1",
-            params![id, hash, now_utc()],
+            "UPDATE documents SET approved_hash=?2, approved_content=?3, approved_at=?4, version=version+1 WHERE id=?1",
+            params![id, hash, canonical_json(&resolved.content()), now_utc()],
         )
         .map_err(internal)?;
         let document = self.resolve_in(&tx, id)?.document;
@@ -1663,6 +1863,19 @@ fn accepted_rows(
         .query_map([], |r| {
             Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))
         })
+        .map_err(internal)?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(internal)
+}
+
+fn accepted_template_rows(
+    connection: &Connection,
+) -> Result<HashMap<String, (String, String)>, StoreError> {
+    let mut statement = connection
+        .prepare("SELECT path, accepted_hash, accepted_at FROM template_files")
+        .map_err(internal)?;
+    statement
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?))))
         .map_err(internal)?
         .collect::<rusqlite::Result<HashMap<_, _>>>()
         .map_err(internal)

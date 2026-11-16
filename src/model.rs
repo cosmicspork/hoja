@@ -158,6 +158,34 @@ pub struct TypeChange {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TemplateStatus {
+    /// Relative to `templates/`.
+    pub path: String,
+    /// `accepted`, `new`, `changed`, `missing` (file removed; the accepted copy still applies).
+    pub state: String,
+    pub file_hash: Option<String>,
+    pub accepted_hash: Option<String>,
+    pub accepted_at: Option<String>,
+    pub error: Option<String>,
+    /// Accepted types whose template reaches this file.
+    pub used_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateChange {
+    pub path: String,
+    pub file_hash: Option<String>,
+    /// The file's text, when it is UTF-8.
+    pub file_text: Option<String>,
+    pub accepted_text: Option<String>,
+    pub binary: bool,
+    pub file_size: Option<usize>,
+    pub accepted_size: Option<usize>,
+    pub error: Option<String>,
+    pub used_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LintFinding {
     pub level: crate::config::Level,
     pub message: String,
@@ -198,6 +226,21 @@ pub struct SetReviewed {
 #[serde(deny_unknown_fields)]
 pub struct VersionOnly {
     pub version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Approve {
+    pub version: i64,
+    /// The content hash of what the person was shown.
+    pub hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptTemplate {
+    pub path: String,
+    pub hash: String,
 }
 
 #[derive(Debug, Deserialize)]
