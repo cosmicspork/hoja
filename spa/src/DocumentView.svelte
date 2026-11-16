@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import FieldInput from './FieldInput.svelte';
+  import Provenance from './Provenance.svelte';
   import Revisions from './Revisions.svelte';
   import { ApiError, api, message, type DocumentView, type Format, type HojaRecord, type TypeConfig } from './lib/api';
   import { eligible, formOf, href, move, patch, recordLabel, titleOf, when } from './lib/views';
@@ -18,6 +19,7 @@
   let previewUrl = $state('');
   let previewError = $state('');
   let previewing = $state(false);
+  let tab = $state<'provenance' | 'pdf'>('provenance');
 
   const doc = $derived(view?.document ?? null);
   const byId = $derived(new Map(records.map(r => [r.id, r])));
@@ -39,7 +41,7 @@
       form = formOf(config.document.fields, next.document.fields);
       selection = Object.fromEntries(config.document.sections.map(s => [s.name, [...(next.document.sections.find(x => x.name === s.name)?.record_ids ?? [])]]));
       error = '';
-      if (refreshPreview && next.has_template) preview();
+      if (refreshPreview && tab === 'pdf' && next.has_template) preview();
     } catch (e) { error = message(e, 'Could not load the document.'); }
   }
 
@@ -216,16 +218,24 @@
       <Revisions revisions={view.revisions} />
     </div>
 
-    {#if view.has_template}
-      <aside class="preview card">
-        <div class="form-head">
-          <h3>Preview</h3>
-          <button onclick={preview} disabled={previewing}>{previewing ? 'Rendering…' : 'Refresh'}</button>
+    <aside class="preview card">
+      <div class="form-head">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'provenance'} class:active={tab === 'provenance'} onclick={() => tab = 'provenance'}>Provenance</button>
+          {#if view.has_template}
+            <button role="tab" aria-selected={tab === 'pdf'} class:active={tab === 'pdf'} onclick={() => { tab = 'pdf'; if (!previewUrl) preview(); }}>PDF</button>
+          {/if}
         </div>
+        {#if tab === 'pdf'}<button onclick={preview} disabled={previewing}>{previewing ? 'Rendering…' : 'Refresh'}</button>{/if}
+      </div>
+      {#if tab === 'provenance'}
+        <Provenance provenance={view.provenance} approvedAt={doc.approved_at} />
+      {:else}
+        <p class="hint">A layout check. Read the words in Provenance.</p>
         {#if previewError}<pre class="error">{previewError}</pre>{/if}
         {#if previewUrl}<iframe title="PDF preview" src={previewUrl}></iframe>{/if}
-      </aside>
-    {/if}
+      {/if}
+    </aside>
   </div>
 {:else if error}
   <p class="error" role="alert">{error}</p>

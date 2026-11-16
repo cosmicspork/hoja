@@ -254,8 +254,9 @@ fn document_view(app: &App, resolved: &Resolved) -> Value {
 
 async fn document(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
     run(move || {
-        let resolved = app.store.resolve(&id)?;
+        let (resolved, provenance) = app.store.inspect(&id)?;
         let mut view = document_view(&app, &resolved);
+        view["provenance"] = serde_json::to_value(provenance).unwrap_or_default();
         view["revisions"] =
             serde_json::to_value(app.store.revisions("document", &id)?).unwrap_or_default();
         Ok(view)
@@ -478,6 +479,18 @@ async fn template_preview(
         Ok(bytes) => ([(header::CONTENT_TYPE, "application/pdf")], bytes).into_response(),
         Err(e) => render_error(e),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarkdownInput {
+    text: String,
+}
+
+/// The editor's live preview, rendered by the same parser that feeds templates.
+async fn markdown_preview(bytes: Result<Bytes, BytesRejection>) -> ApiResult {
+    let input: MarkdownInput = parse(bytes)?;
+    Ok(Json(json!({"html": crate::markdown::html(&input.text, 1)})))
 }
 
 async fn create_record(State(app): State<App>, bytes: Result<Bytes, BytesRejection>) -> Response {
@@ -862,6 +875,7 @@ pub fn router(app: App) -> Router {
         .route("/api/documents/{id}/approve", post(approve))
         .route("/api/documents/{id}/preview.pdf", get(preview))
         .route("/api/documents/{id}/export", post(person_export))
+        .route("/api/markdown", post(markdown_preview))
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}/decide", post(decide))
         .nest("/api/agent", agent)

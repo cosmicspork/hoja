@@ -1248,3 +1248,124 @@ fn accepted_templates_survive_a_restart() {
     assert_eq!(entry, "status-report.typ");
     assert_eq!(files[&entry].body.as_slice(), b"report");
 }
+
+#[test]
+fn provenance_follows_revisions_cards_and_approval() {
+    use hoja::provenance::Origin;
+    let f = Fixture::new();
+    let role = applied(
+        create(
+            &f.store,
+            &Actor::Person,
+            "resume",
+            "role",
+            json!({"employer": "Acme"}),
+        )
+        .unwrap(),
+    );
+    let bullet = applied(
+        create(
+            &f.store,
+            &Actor::Person,
+            "resume",
+            "bullet",
+            json!({"text": "Led the migration to Postgres", "role": role.id}),
+        )
+        .unwrap(),
+    );
+    let doc = applied(
+        f.store
+            .create_document(
+                &Actor::Person,
+                CreateDocument {
+                    type_name: "resume".into(),
+                    title: "Platform roles".into(),
+                    fields: Map::new(),
+                    note: String::new(),
+                },
+            )
+            .unwrap(),
+    );
+    let doc = applied(
+        f.store
+            .select(
+                &Actor::Person,
+                &doc.id,
+                "experience",
+                SelectSection {
+                    version: doc.version,
+                    record_ids: vec![bullet.id.clone()],
+                    note: String::new(),
+                },
+            )
+            .unwrap(),
+    );
+    // The agent rewords the person's bullet; the person accepts the card.
+    let id = card(edit(
+        &f.store,
+        &agent(),
+        &bullet.id,
+        json!({"text": "Led the zero-downtime migration to Postgres"}),
+    ));
+    accept(&f.store, &id, None).unwrap();
+
+    let (_, p) = f.store.inspect(&doc.id).unwrap();
+    assert!(!p.baseline);
+    let group = &p.sections[0].groups[0];
+    let heading: String = group
+        .heading
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(heading, "Acme");
+    let label = &group.items[0].label;
+    let accepted: Vec<&str> = label
+        .iter()
+        .filter(|s| s.origin == Origin::Accepted)
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(accepted, vec!["zero-downtime"]);
+    assert!(label.iter().all(|s| s.origin != Origin::Agent));
+    assert_eq!(p.summary.accepted_words, 1);
+    // The ref field shows the employer, not an id.
+    let role_field = group.items[0]
+        .fields
+        .iter()
+        .find(|f| f.name == "role")
+        .unwrap();
+    assert_eq!(role_field.spans[0].text, "Acme");
+
+    // After approval, a later edit is marked against what was approved.
+    f.store
+        .approve_document(
+            &Actor::Person,
+            &doc.id,
+            doc.version,
+            &hash(&f.store, &doc.id),
+        )
+        .unwrap();
+    applied(edit(
+        &f.store,
+        &Actor::Person,
+        &bullet.id,
+        json!({"text": "Led the migration to Postgres 16"}),
+    ));
+    let (_, p) = f.store.inspect(&doc.id).unwrap();
+    assert!(p.baseline);
+    let label = &p.sections[0].groups[0].items[0].label;
+    let removed: Vec<&str> = label
+        .iter()
+        .filter(|s| s.removed)
+        .map(|s| s.text.trim())
+        .collect();
+    let changed: Vec<&str> = label
+        .iter()
+        .filter(|s| s.changed)
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(removed, vec!["zero-downtime"]);
+    assert_eq!(changed, vec!["16"]);
+    assert_eq!((p.summary.changed_words, p.summary.removed_words), (1, 1));
+}

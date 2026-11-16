@@ -173,3 +173,104 @@ export function href(route: Route): string {
     case 'types': return '#/types';
   }
 }
+
+export type DiffPart = { kind: 'same' | 'add' | 'remove'; text: string };
+
+function tokenDiff(a: string[], b: string[], separator = ''): DiffPart[] {
+  // Trim the common ends first: most edits are local, and LCS is quadratic.
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
+  const midA = a.slice(start, endA);
+  const midB = b.slice(start, endB);
+  const parts: DiffPart[] = a.slice(0, start).map(text => ({ kind: 'same', text }));
+  if (midA.length * midB.length > 4_000_000) {
+    parts.push(...midA.map(text => ({ kind: 'remove' as const, text })), ...midB.map(text => ({ kind: 'add' as const, text })));
+  } else {
+    const lcs: number[][] = Array.from({ length: midA.length + 1 }, () => new Array<number>(midB.length + 1).fill(0));
+    for (let i = midA.length - 1; i >= 0; i--) {
+      for (let j = midB.length - 1; j >= 0; j--) {
+        lcs[i][j] = midA[i] === midB[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < midA.length && j < midB.length) {
+      if (midA[i] === midB[j]) { parts.push({ kind: 'same', text: midA[i] }); i++; j++; }
+      else if (lcs[i + 1][j] >= lcs[i][j + 1]) parts.push({ kind: 'remove', text: midA[i++] });
+      else parts.push({ kind: 'add', text: midB[j++] });
+    }
+    while (i < midA.length) parts.push({ kind: 'remove', text: midA[i++] });
+    while (j < midB.length) parts.push({ kind: 'add', text: midB[j++] });
+  }
+  parts.push(...a.slice(endA).map(text => ({ kind: 'same' as const, text })));
+  if (!separator) return mergeParts(parts);
+  // List entries: put the separator between entries, unmarked.
+  const out: DiffPart[] = [];
+  parts.forEach((part, index) => {
+    if (index > 0) out.push({ kind: 'same', text: separator });
+    out.push(part);
+  });
+  return mergeParts(out);
+}
+
+function mergeParts(parts: DiffPart[]): DiffPart[] {
+  // A changed run (changed tokens, and lone whitespace between them) becomes
+  // one removal and one addition, so a rewritten phrase reads as a phrase.
+  const grouped: DiffPart[] = [];
+  let i = 0;
+  while (i < parts.length) {
+    if (parts[i].kind === 'same') { grouped.push(parts[i++]); continue; }
+    let end = i;
+    while (end + 1 < parts.length) {
+      const next = parts[end + 1];
+      if (next.kind !== 'same') { end++; continue; }
+      if (!next.text.trim() && parts[end + 2] && parts[end + 2].kind !== 'same') { end += 2; continue; }
+      break;
+    }
+    let removed = '';
+    let added = '';
+    for (const part of parts.slice(i, end + 1)) {
+      if (part.kind !== 'add') removed += part.text;
+      if (part.kind !== 'remove') added += part.text;
+    }
+    if (removed.trim()) grouped.push({ kind: 'remove', text: removed });
+    if (added.trim()) grouped.push({ kind: 'add', text: added });
+    i = end + 1;
+  }
+  const out: DiffPart[] = [];
+  for (const part of grouped) {
+    const last = out[out.length - 1];
+    if (last && last.kind === part.kind) last.text += part.text;
+    else out.push({ ...part });
+  }
+  return out;
+}
+
+/** A word-level diff: words and the whitespace between them are the units. */
+export function wordDiff(before: string, after: string): DiffPart[] {
+  const tokens = (s: string) => s.match(/\s+|\S+/g) ?? [];
+  return tokenDiff(tokens(before), tokens(after));
+}
+
+/** A diff of two stored values: words for text, entries for lists, whole values otherwise. */
+export function valueDiff(before: Value | null | undefined, after: Value | null | undefined): DiffPart[] {
+  if (Array.isArray(before) || Array.isArray(after)) {
+    const list = (v: Value | null | undefined) => Array.isArray(v) ? v : v === undefined || v === null ? [] : [display(v)];
+    return tokenDiff(list(before), list(after), ', ');
+  }
+  if (typeof before === 'string' || typeof after === 'string') {
+    return wordDiff(typeof before === 'string' ? before : display(before), typeof after === 'string' ? after : display(after));
+  }
+  const a = display(before);
+  const b = display(after);
+  if (a === b) return a ? [{ kind: 'same', text: a }] : [];
+  return [...(a ? [{ kind: 'remove' as const, text: a }] : []), ...(b ? [{ kind: 'add' as const, text: b }] : [])];
+}
+
+/** The latest content the person marked reviewed, from a record's revisions (newest first). */
+export function lastReviewed<T extends { change: string; version: number; snapshot: { fields?: Fields; reviewed?: boolean } }>(revisions: T[]): T | null {
+  return revisions.find(r => r.snapshot.reviewed === true) ?? null;
+}

@@ -188,3 +188,48 @@ pre.lines .skip { display: block; color: var(--muted); font-style: italic; paddi
   .list-pane { position: static; }
   .compare { grid-template-columns: 1fr; }
 }
+
+.prose-editor.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.prose-preview { border: 1px solid var(--line); border-radius: 8px; padding: 2px 14px; max-height: 70vh; overflow-y: auto; line-height: 1.5; }
+.prose-preview h2, .prose-preview h3, .prose-preview h4 { margin: 12px 0 6px; }
+.prose-preview blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.prose-preview code { color: inherit; }
+.prose-tools { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+@media (max-width: 900px) { .prose-editor.split { grid-template-columns: 1fr; } }
+
+/* Diffs: removed words struck, added words highlighted. */
+.diff { white-space: pre-wrap; line-height: 1.6; }
+.diff .add { background: var(--accent-soft); color: var(--accent); border-radius: 3px; }
+.diff .remove { background: var(--bad-soft); color: var(--bad); text-decoration: line-through; border-radius: 3px; }
+.reviewed-diff { border-left: 3px solid var(--warn); }
+.reviewed-diff dl { margin: 8px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; }
+.reviewed-diff dt { font-weight: 600; font-size: 13px; }
+.reviewed-diff dd { margin: 0; }
+.compare li.added { color: var(--accent); }
+.compare li.added::after { content: " (added)"; font-size: 11px; }
+.compare li.dropped { color: var(--bad); text-decoration: line-through; }
+
+/* Provenance: unmarked is the person's or reviewed; light is accepted agent
+   wording; strong is unreviewed agent text; changes since approval are
+   underlined, removals struck. */
+.provenance { line-height: 1.6; }
+.provenance h1 { font-size: 20px; margin-bottom: 10px; }
+.provenance h2 { margin: 18px 0 6px; font-size: 15px; }
+.provenance h3 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
+.provenance .prose { white-space: pre-wrap; margin: 0 0 10px; }
+.provenance .meta-field { font-size: 12.5px; color: var(--muted); }
+.provenance .meta-field b { font-weight: 600; }
+.provenance ul { margin: 0; padding-left: 18px; }
+.provenance li { margin: 6px 0; }
+.provenance li.added { outline: 2px dashed var(--warn); outline-offset: 3px; border-radius: 4px; }
+.provenance .removed-items { color: var(--bad); text-decoration: line-through; font-size: 12.5px; }
+.pv.accepted { background: color-mix(in srgb, var(--agent-soft) 75%, transparent); border-radius: 3px; }
+.pv.agent { background: var(--agent); color: var(--paper); border-radius: 3px; padding: 0 1px; }
+.pv.changed { text-decoration: underline wavy var(--warn); text-underline-offset: 3px; }
+.pv.removed { color: var(--bad); text-decoration: line-through; opacity: .8; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+.legend .pv { padding: 0 4px; }
+.tabs { display: flex; gap: 4px; }
+.tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.preview .provenance { max-height: calc(100vh - 160px); overflow-y: auto; }
+.subhead-small { margin: 14px 0 6px; }

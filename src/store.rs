@@ -17,6 +17,7 @@ use crate::model::{
     Outcome, Record, Revision, Section, SelectSection, TemplateChange, TemplateStatus, TypeChange,
     TypeStatus, UpdateDocument, UpdateRecord,
 };
+use crate::provenance::{self, Provenance};
 use crate::templates::{self, DiskTemplate, TemplateFile, TemplateSet};
 
 pub struct Store {
@@ -508,26 +509,7 @@ impl Store {
     }
 
     pub fn revisions(&self, target_kind: &str, id: &str) -> Result<Vec<Revision>, StoreError> {
-        let connection = self.lock()?;
-        let mut statement = connection
-            .prepare("SELECT version, author, agent, approval_id, edited, change, snapshot_json, created_at FROM revisions WHERE target_kind=?1 AND target_id=?2 ORDER BY version DESC")
-            .map_err(internal)?;
-        statement
-            .query_map(params![target_kind, id], |r| {
-                Ok(Revision {
-                    version: r.get(0)?,
-                    author: parse_author(&r.get::<_, String>(1)?),
-                    agent: r.get(2)?,
-                    approval_id: r.get(3)?,
-                    edited: r.get(4)?,
-                    change: r.get(5)?,
-                    snapshot: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
-                    created_at: r.get(7)?,
-                })
-            })
-            .map_err(internal)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(internal)
+        revisions_in(&*self.lock()?, target_kind, id)
     }
 
     pub fn create_record(
@@ -734,6 +716,120 @@ impl Store {
     pub fn resolve(&self, id: &str) -> Result<Resolved, StoreError> {
         let connection = self.lock()?;
         self.resolve_in(&connection, id)
+    }
+
+    /// The document and where each word of it came from, read under one lock
+    /// so the provenance describes exactly the content its hash covers.
+    pub fn inspect(&self, id: &str) -> Result<(Resolved, Provenance), StoreError> {
+        let connection = self.lock()?;
+        let resolved = self.resolve_in(&connection, id)?;
+        let document_history = revisions_in(&connection, "document", id)?;
+        let mut record_history = HashMap::new();
+        let records = resolved
+            .sections
+            .iter()
+            .flat_map(|s| s.records.iter())
+            .chain(resolved.refs.values());
+        for record in records {
+            if !record_history.contains_key(&record.id) {
+                record_history.insert(
+                    record.id.clone(),
+                    revisions_in(&connection, "record", &record.id)?,
+                );
+            }
+        }
+        let approved: Option<Value> = connection
+            .query_row(
+                "SELECT approved_content FROM documents WHERE id=?1",
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .map_err(internal)?
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let labels = self.ref_labels(&connection, &resolved, approved.as_ref())?;
+        let provenance = provenance::build(provenance::Inputs {
+            resolved: &resolved,
+            document_history: &document_history,
+            record_history: &record_history,
+            approved: approved.as_ref(),
+            labels: &labels,
+        });
+        Ok((resolved, provenance))
+    }
+
+    /// Labels for every record a ref field names, now or in the approved content.
+    fn ref_labels(
+        &self,
+        connection: &Connection,
+        resolved: &Resolved,
+        approved: Option<&Value>,
+    ) -> Result<HashMap<String, String>, StoreError> {
+        let mut ids: Vec<String> = Vec::new();
+        let mut collect = |fields: &indexmap::IndexMap<String, crate::config::FieldConfig>,
+                           values: &Map<String, Value>| {
+            for (name, field) in fields {
+                if field.ty == FieldType::Ref
+                    && let Some(Value::String(id)) = values.get(name)
+                {
+                    ids.push(id.clone());
+                }
+            }
+        };
+        collect(&resolved.config.document.fields, &resolved.document.fields);
+        if let Some(fields) = approved.and_then(|a| a["fields"].as_object()) {
+            collect(&resolved.config.document.fields, fields);
+        }
+        for record in resolved.sections.iter().flat_map(|s| s.records.iter()) {
+            if let Some(kind) = resolved.kind_config(record) {
+                collect(&kind.fields, &record.fields);
+            }
+        }
+        for section in approved
+            .and_then(|a| a["sections"].as_array())
+            .into_iter()
+            .flatten()
+        {
+            for item in section["items"].as_array().into_iter().flatten() {
+                let Some(id) = item["id"].as_str() else {
+                    continue;
+                };
+                let (Some(record), Some(fields)) = (
+                    resolved
+                        .sections
+                        .iter()
+                        .flat_map(|s| s.records.iter())
+                        .find(|r| r.id == id),
+                    item["fields"].as_object(),
+                ) else {
+                    continue;
+                };
+                if let Some(kind) = resolved.kind_config(record) {
+                    collect(&kind.fields, fields);
+                }
+            }
+        }
+        let mut labels = HashMap::new();
+        for id in ids {
+            if labels.contains_key(&id) {
+                continue;
+            }
+            let Some(record) = load_record(connection, &id)? else {
+                continue;
+            };
+            let label = self
+                .config(&record.type_name)
+                .ok()
+                .and_then(|c| {
+                    c.kind(&record.kind)
+                        .and_then(|k| k.label_field())
+                        .and_then(|f| record.fields.get(f))
+                        .and_then(Value::as_str)
+                        .map(String::from)
+                })
+                .unwrap_or_else(|| format!("{} {}", record.kind, &id[..id.len().min(8)]));
+            labels.insert(id, label);
+        }
+        Ok(labels)
     }
 
     fn resolve_in(&self, connection: &Connection, id: &str) -> Result<Resolved, StoreError> {
@@ -1237,6 +1333,32 @@ impl Store {
 }
 
 // ---- row access -----------------------------------------------------------
+
+fn revisions_in(
+    connection: &Connection,
+    target_kind: &str,
+    id: &str,
+) -> Result<Vec<Revision>, StoreError> {
+    let mut statement = connection
+        .prepare("SELECT version, author, agent, approval_id, edited, change, snapshot_json, created_at FROM revisions WHERE target_kind=?1 AND target_id=?2 ORDER BY version DESC")
+        .map_err(internal)?;
+    statement
+        .query_map(params![target_kind, id], |r| {
+            Ok(Revision {
+                version: r.get(0)?,
+                author: parse_author(&r.get::<_, String>(1)?),
+                agent: r.get(2)?,
+                approval_id: r.get(3)?,
+                edited: r.get(4)?,
+                change: r.get(5)?,
+                snapshot: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
+                created_at: r.get(7)?,
+            })
+        })
+        .map_err(internal)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(internal)
+}
 
 const RECORD_SELECT: &str = "SELECT r.id, r.type, r.kind, r.fields_json, r.reviewed, r.reviewed_at, r.version, r.created_at, r.updated_at, r.deleted_at,
  (SELECT author||char(31)||IFNULL(agent,'') FROM revisions v WHERE v.target_kind='record' AND v.target_id=r.id AND v.change IN ('create','update') ORDER BY v.version ASC LIMIT 1),

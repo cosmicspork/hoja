@@ -1,7 +1,7 @@
 <script lang="ts">
   import FieldInput from './FieldInput.svelte';
   import { api, message, type Approval, type FieldConfig, type HojaRecord, type TypeStatus, type Value } from './lib/api';
-  import { display, fieldChanges, fromForm, href, recordLabel, titleOf, toForm, when } from './lib/views';
+  import { fromForm, href, recordLabel, titleOf, toForm, valueDiff, when, wordDiff, type DiffPart } from './lib/views';
 
   let { types, onchange }: { types: TypeStatus[]; onchange: () => void } = $props();
 
@@ -89,13 +89,44 @@
     return approval.current?.title ?? approval.payload.title ?? '';
   }
 
-  function selectionLabels(ids: string[] | undefined): string[] {
-    const c = (id: string) => byId.get(id);
-    return (ids ?? []).map(id => { const r = c(id); return r ? recordLabel(types.find(t => t.name === r.type)?.config, r) : id; });
+  function selectionLabel(id: string): string {
+    const r = byId.get(id);
+    return r ? recordLabel(types.find(t => t.name === r.type)?.config, r) : id;
+  }
+
+  function refLabel(value: Value | null | undefined): string | null {
+    return typeof value === 'string' ? selectionLabel(value) : null;
   }
 
   $effect(() => { load(); });
 </script>
+
+{#snippet diff(parts: DiffPart[])}{#if parts.length && parts.every(p => p.kind === 'same')}<span class="muted">unchanged</span>{:else}<span class="diff">{#each parts as part, i (i)}<span class={part.kind}>{part.text}</span>{/each}</span>{/if}{/snippet}
+
+{#snippet changes(approval: Approval, payload: Approval['payload'])}
+  {@const fields = fieldConfigs(approval)}
+  <table class="changes">
+    <thead><tr><th>Field</th><th>{approval.current ? 'Change' : 'Proposed'}</th></tr></thead>
+    <tbody>
+      {#if payload.title !== undefined}
+        <tr><td>Title</td><td>{@render diff(wordDiff(approval.current?.title ?? '', payload.title))}</td></tr>
+      {/if}
+      {#each Object.entries(payload.fields ?? {}) as [name, value] (name)}
+        <tr>
+          <td>{titleOf(name, fields[name])}{#if fields[name]?.type === 'ref'} <span class="muted">(record)</span>{/if}</td>
+          <td>
+            {#if fields[name]?.type === 'ref'}
+              {@render diff(valueDiff(refLabel(approval.current?.fields?.[name]), refLabel(value)))}
+            {:else}
+              {@render diff(valueDiff(approval.current?.fields?.[name], value))}
+            {/if}
+            {#if (value === null || value === undefined) && approval.current?.fields?.[name] !== undefined}<span class="muted"> (cleared)</span>{/if}
+          </td>
+        </tr>
+      {/each}
+    </tbody>
+  </table>
+{/snippet}
 
 <header class="page-head">
   <div>
@@ -123,9 +154,11 @@
     {#if approval.stale}<p class="error">This changed since the agent read it, so it can't be accepted. Reject it or request changes; the agent resubmits against the current version.</p>{/if}
 
     {#if approval.action === 'document.select'}
+      {@const now = approval.current?.sections?.find(s => s.name === approval.payload.section)?.record_ids ?? []}
+      {@const proposed = approval.payload.record_ids ?? []}
       <div class="compare">
-        <div><h4>Now: {approval.payload.section}</h4><ol>{#each selectionLabels(approval.current?.sections?.find(s => s.name === approval.payload.section)?.record_ids) as l, i (i)}<li>{l}</li>{:else}<li class="muted">empty</li>{/each}</ol></div>
-        <div><h4>Proposed</h4><ol>{#each selectionLabels(approval.payload.record_ids) as l, i (i)}<li>{l}</li>{:else}<li class="muted">empty</li>{/each}</ol></div>
+        <div><h4>Now: {approval.payload.section}</h4><ol>{#each now as rid, i (i)}<li class:dropped={!proposed.includes(rid)}>{selectionLabel(rid)}</li>{:else}<li class="muted">empty</li>{/each}</ol></div>
+        <div><h4>Proposed</h4><ol>{#each proposed as rid, i (i)}<li class:added={!now.includes(rid)}>{selectionLabel(rid)}</li>{:else}<li class="muted">empty</li>{/each}</ol></div>
       </div>
     {:else if form && c}
       <div class="fields">
@@ -136,21 +169,11 @@
           {#if fields[name]}<FieldInput {name} field={fields[name]} config={c} {records} bind:value={editing[approval.id][name]} />{/if}
         {/each}
       </div>
+      {@const edited = editedPayload(approval)}
+      <h4 class="subhead-small">Your edit against what's there now</h4>
+      {@render changes(approval, edited ?? approval.payload)}
     {:else}
-      <table class="changes">
-        <thead><tr><th>Field</th><th>Now</th><th>Proposed</th></tr></thead>
-        <tbody>
-          {#if approval.payload.title !== undefined}
-            <tr><td>Title</td><td>{approval.current?.title ?? ''}</td><td class="add">{approval.payload.title}</td></tr>
-          {/if}
-          {#each fieldChanges(approval.current?.fields, approval.payload.fields) as change (change.name)}
-            <tr><td>{titleOf(change.name, fields[change.name])}</td><td class="remove">{change.before}</td><td class="add">{change.after || '(cleared)'}</td></tr>
-          {/each}
-          {#each Object.entries(approval.payload.fields ?? {}).filter(([n, v]) => display(v ?? undefined) === display(approval.current?.fields?.[n])) as [name] (name)}
-            <tr><td>{titleOf(name, fields[name])}</td><td colspan="2" class="muted">unchanged</td></tr>
-          {/each}
-        </tbody>
-      </table>
+      {@render changes(approval, approval.payload)}
     {/if}
 
     <div class="form-actions">

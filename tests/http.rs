@@ -484,6 +484,51 @@ async fn templates_are_previewed_before_acceptance_and_approval_needs_the_shown_
     assert_eq!(status, 200, "{approved}");
 }
 
+#[tokio::test]
+async fn markdown_previews_and_provenance_come_from_the_server() {
+    let server = start().await;
+    server.accept_types().await;
+    let body = json!({"text": "**Bold** <script>x</script>"}).to_string();
+    let (status, out) = server
+        .send(server.person("POST", "/api/markdown", &body))
+        .await;
+    assert_eq!(status, 200);
+    let html = out["html"].as_str().unwrap();
+    assert!(html.contains("<strong>Bold</strong>"), "{html}");
+    assert!(!html.contains("<script>"), "{html}");
+
+    let item = json!({"type": "status-report", "kind": "item", "fields": {"text": "Shipped sync", "status": "done", "refs": ["!1"]}}).to_string();
+    let (_, created) = server
+        .send(server.agent("POST", "/api/agent/records", &item))
+        .await;
+    let record = created["result"]["id"].as_str().unwrap().to_string();
+    let doc = json!({"type": "status-report", "title": "October", "fields": {"period": "2026-10"}})
+        .to_string();
+    let (_, created) = server
+        .send(server.person("POST", "/api/documents", &doc))
+        .await;
+    let id = created["result"]["id"].as_str().unwrap().to_string();
+    let select = json!({"version": 1, "record_ids": [record]}).to_string();
+    server
+        .send(server.person(
+            "PUT",
+            &format!("/api/documents/{id}/sections/done"),
+            &select,
+        ))
+        .await;
+    let (_, view) = server
+        .send(server.person("GET", &format!("/api/documents/{id}"), ""))
+        .await;
+    let provenance = &view["provenance"];
+    assert_eq!(provenance["title"][0]["origin"], "person");
+    let label = &provenance["sections"][0]["groups"][0]["items"][0]["label"][0];
+    assert_eq!(label["text"], "Shipped sync");
+    assert_eq!(label["origin"], "agent");
+    assert_eq!(label["agent"], "claude");
+    // "Shipped sync", plus the status and refs fields.
+    assert_eq!(provenance["summary"]["agent_words"], 4);
+}
+
 fn which(binary: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|p| p.join(binary).is_file()))

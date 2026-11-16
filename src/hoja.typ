@@ -29,7 +29,7 @@
     if node.ordered { enum(start: node.start, ..items) } else { list(..items) }
   }
   else if node.t == "quote" { quote(block: true, _render(node.c, offset)) }
-  else if node.t == "code" { raw(node.text, block: true) }
+  else if node.t == "codeblock" { raw(node.text, block: true) }
   else if node.t == "hr" { line(length: 100%, stroke: 0.5pt + luma(160)) }
 }
 

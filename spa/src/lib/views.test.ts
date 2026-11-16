@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { FieldConfig, HojaRecord, SectionConfig } from './api';
-import { collapse, eligible, fieldChanges, fromForm, href, lineDiff, move, parseRoute, patch, toForm } from './views';
+import { collapse, eligible, fieldChanges, fromForm, href, lineDiff, move, parseRoute, patch, toForm, valueDiff, wordDiff } from './views';
 
 const text: FieldConfig = { type: 'text', required: false, person_only: false };
 const tags: FieldConfig = { type: 'tags', required: false, person_only: false };
@@ -75,4 +75,31 @@ test('collapse folds unchanged runs outside the context', () => {
   const lines = lineDiff('1\n2\n3\n4\n5\n6', '1\n2\n3\n4\n5\nsix');
   expect(collapse(lines, 1).map(l => l.kind)).toEqual(['skip', 'same', 'remove', 'add']);
   expect(collapse(lines, 1)[0].text).toBe('4 unchanged lines');
+});
+
+test('wordDiff marks changed words and joins rewritten phrases', () => {
+  expect(wordDiff('Led the migration to Postgres', 'Led the zero-downtime migration to Postgres 16')).toEqual([
+    { kind: 'same', text: 'Led the ' },
+    { kind: 'add', text: 'zero-downtime ' },
+    { kind: 'same', text: 'migration to Postgres' },
+    { kind: 'add', text: ' 16' }
+  ]);
+  expect(wordDiff('ship in March next year', 'ship in May this year')).toEqual([
+    { kind: 'same', text: 'ship in ' },
+    { kind: 'remove', text: 'March next' },
+    { kind: 'add', text: 'May this' },
+    { kind: 'same', text: ' year' }
+  ]);
+  expect(wordDiff('same', 'same')).toEqual([{ kind: 'same', text: 'same' }]);
+});
+
+test('valueDiff compares list entries and scalars', () => {
+  expect(valueDiff(['!1', 'A-2'], ['!1', 'A-3'])).toEqual([
+    { kind: 'same', text: '!1, ' },
+    { kind: 'remove', text: 'A-2' },
+    { kind: 'same', text: ', ' },
+    { kind: 'add', text: 'A-3' }
+  ]);
+  expect(valueDiff(undefined, 'new')).toEqual([{ kind: 'add', text: 'new' }]);
+  expect(valueDiff(true, null)).toEqual([{ kind: 'remove', text: 'yes' }]);
 });

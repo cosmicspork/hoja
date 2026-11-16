@@ -20,6 +20,17 @@ These are in code, not configuration. A type file can tighten them and has no wa
 - **Cards apply to what the agent saw.** A card records the version the agent read. If the fields it touches changed since, it is stale and can only be rejected or sent back.
 - **Type files and templates need the person's acceptance.** hoja runs on the accepted copy of each `types/*.toml` and of every file under `templates/`. A new or edited file shows its diff in the UI (a template also renders a preview) and takes effect only when the person accepts those exact contents. A document's content hash includes every accepted template file its template reaches, so accepting a template change returns the documents it renders to draft, and editing a file on disk changes nothing until it is accepted.
 
+### Reviewing in small diffs
+
+hoja never asks for a whole-document proofread. Cards show agent changes as word diffs (list fields entry by entry). A record that changed since you marked it reviewed shows just what changed. The document page's **Provenance** view marks every word by where it came from, worked out from the revision history:
+
+- unmarked: you wrote it, or an agent wrote it and you have since marked the record reviewed;
+- light highlight: agent wording you accepted on a card, at the words that changed;
+- strong highlight: agent text you haven't reviewed;
+- a wavy underline on anything changed since you last approved the document, with removed words struck through.
+
+hoja renders this view itself, so no template can hide it. The PDF tab is a layout check; the words to read are the highlighted ones.
+
 ### Cards
 
 An agent request that needs the person returns immediately:
@@ -88,6 +99,18 @@ hoja compiles the type's template in a scratch directory holding `data.json` and
 ```
 
 `hoja.typ` and `data.json` are reserved names. hoja supplies `hoja.typ` itself (see Markdown below); a file in a subdirectory imports it as `"/hoja.typ"`. Compile errors show in the UI and the CLI as Typst prints them. Markdown and HTML exports are built in from the sections' `item` patterns.
+
+### Markdown
+
+`text` fields are Markdown: paragraphs, `#` headings, `-` and `1.` lists, `*emphasis*`, `**strong**`, `` `code` ``, quotes, and http(s) or mailto links. Raw HTML stays literal text. The editor has a live preview, and the HTML export renders it. Templates get each text field's parsed form next to the raw string, under `_md`, and render it with hoja's helper:
+
+```typst
+#import "hoja.typ": md
+#md(data.document, "summary")        // a document field
+#for item in section.items [ #md(item, "description") ]
+```
+
+`md` never evaluates text as Typst. Markdown headings start one level below the template's own (`heading-offset: 1`).
 
 Reviewing a template under **Types** shows its diff and renders a preview with that file swapped in: from `samples/<type>.json` when it exists (`{"title", "fields", "sections": {"<name>": [{"fields": {...}}]}}`), from placeholders when it doesn't, or from one of your documents.
 

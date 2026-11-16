@@ -2,7 +2,7 @@
   import FieldInput from './FieldInput.svelte';
   import Revisions from './Revisions.svelte';
   import { api, message, type HojaRecord, type Revision, type TypeConfig } from './lib/api';
-  import { authorText, filterRecords, formOf, href, patch, recordLabel, titleOf, when } from './lib/views';
+  import { authorText, filterRecords, formOf, href, lastReviewed, patch, recordLabel, titleOf, valueDiff, when } from './lib/views';
 
   let { typeName, kind, config, selectedId, onchange }: {
     typeName: string;
@@ -23,6 +23,20 @@
   let creating = $state(false);
 
   const records = $derived(filterRecords(all.filter(r => r.kind === kind), query));
+  // What changed since the person last marked this record reviewed: the
+  // small diff to review, instead of rereading the whole record.
+  const sinceReview = $derived.by(() => {
+    if (!current || current.reviewed) return null;
+    const base = lastReviewed(revisions);
+    if (!base) return null;
+    const before = base.snapshot.fields ?? {};
+    const after = current.fields;
+    const names = [...new Set([...Object.keys(kindConfig?.fields ?? {}), ...Object.keys(before), ...Object.keys(after)])];
+    const changes = names
+      .map(name => ({ name, parts: valueDiff(before[name], after[name]) }))
+      .filter(c => c.parts.some(p => p.kind !== 'same'));
+    return { version: base.version, changes };
+  });
   const dirty = $derived(kindConfig && (creating || current) ? Object.keys(patch(kindConfig.fields, current?.fields ?? {}, form)).length > 0 : false);
 
   async function load() {
@@ -133,6 +147,17 @@
   </section>
 
   <section class="detail-pane">
+    {#if sinceReview && sinceReview.changes.length}
+      <section class="card reviewed-diff">
+        <h3>Changed since you reviewed it (v{sinceReview.version})</h3>
+        <dl>
+          {#each sinceReview.changes as change (change.name)}
+            <dt>{titleOf(change.name, kindConfig.fields[change.name])}</dt>
+            <dd class="diff">{#each change.parts as part, i (i)}<span class={part.kind}>{part.text}</span>{/each}</dd>
+          {/each}
+        </dl>
+      </section>
+    {/if}
     {#if creating || current}
       <form class="card form" onsubmit={save}>
         <div class="form-head">

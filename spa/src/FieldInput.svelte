@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProseEditor from './ProseEditor.svelte';
   import type { FieldConfig, HojaRecord, TypeConfig } from './lib/api';
   import { recordLabel, titleOf } from './lib/views';
 
@@ -22,7 +23,7 @@
     {#if field.person_only}<span class="badge person" title="Agents can neither write nor suggest this field">yours only</span>{/if}
   </label>
   {#if field.type === 'text'}
-    <textarea {id} rows="4" bind:value {disabled}></textarea>
+    <ProseEditor {id} bind:value {disabled} />
   {:else if field.type === 'tags' || field.type === 'list'}
     <textarea {id} rows="3" bind:value {disabled} placeholder={field.type === 'tags' ? 'one per line or comma-separated' : 'one per line'}></textarea>
   {:else if field.type === 'enum'}

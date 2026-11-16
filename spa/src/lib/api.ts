@@ -106,6 +106,17 @@ export interface HojaDocument {
   created_by: Attribution | null;
   updated_by: Attribution | null;
 }
+export type Origin = 'person' | 'reviewed' | 'accepted' | 'agent' | 'layout';
+export interface Span { text: string; origin: Origin; changed?: boolean; removed?: boolean; agent?: string; version?: number }
+export interface FieldView { name: string; title: string; long: boolean; spans: Span[] }
+export interface ItemView { id: string; type: string; kind: string; reviewed: boolean; added: boolean; label: Span[]; fields: FieldView[] }
+export interface Provenance {
+  baseline: boolean;
+  title: Span[];
+  fields: FieldView[];
+  sections: { name: string; title: string; groups: { heading: Span[] | null; items: ItemView[] }[]; removed: string[] }[];
+  summary: { agent_words: number; accepted_words: number; changed_words: number; removed_words: number };
+}
 export interface LintFinding { level: 'error' | 'warn'; message: string; record_id: string | null; field: string | null }
 export interface DocumentView {
   document: HojaDocument;
@@ -116,6 +127,7 @@ export interface DocumentView {
   exports: { format: Format; filename: string }[];
   has_template: boolean;
   revisions: Revision[];
+  provenance: Provenance;
 }
 export type Action = 'record.create' | 'record.update' | 'document.create' | 'document.update' | 'document.select';
 export interface Approval {
@@ -204,6 +216,8 @@ export const api = {
   approve: (did: string, version: number, hash: string) => request<HojaDocument>(`/api/documents/${id(did)}/approve`, json('POST', { version, hash })),
   preview: async (did: string) => (await send(`/api/documents/${id(did)}/preview.pdf`)).blob(),
   exportDocument: (did: string, format: Format) => request<{ path: string; filename: string; approved: boolean }>(`/api/documents/${id(did)}/export`, json('POST', { format })),
+
+  markdown: (text: string) => request<{ html: string }>('/api/markdown', json('POST', { text })),
 
   approvals: (state?: string) => request<Approval[]>(`/api/approvals${query({ state })}`),
   decide: (aid: string, decision: 'accept' | 'reject' | 'request_changes', reason: string | null, payload?: Approval['payload']) =>

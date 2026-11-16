@@ -9,19 +9,36 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use crate::config::{FieldConfig, FieldType, Format, TypeConfig, placeholders};
+use crate::markdown::{self, escape};
 use crate::model::{Document, Record};
 use crate::store::{Resolved, ResolvedSection};
 use crate::templates::TemplateFile;
 
 const TYPST_TIMEOUT: Duration = Duration::from_secs(60);
 
-fn item(record: &Record) -> Value {
+fn text_fields(fields: &indexmap::IndexMap<String, FieldConfig>) -> impl Iterator<Item = &String> {
+    fields
+        .iter()
+        .filter(|(_, f)| f.ty == FieldType::Text)
+        .map(|(name, _)| name)
+}
+
+/// A record as a template sees it: its fields at the top level, plus `id`,
+/// `kind`, `reviewed`, and `_md` holding each text field's parsed Markdown.
+/// Field names start with a letter, so `_md` can't collide with one.
+fn item(resolved: &Resolved, record: &Record) -> Value {
     let mut map = Map::new();
     map.insert("id".into(), Value::String(record.id.clone()));
     map.insert("kind".into(), Value::String(record.kind.clone()));
     map.insert("reviewed".into(), Value::Bool(record.reviewed));
     for (k, v) in &record.fields {
         map.insert(k.clone(), v.clone());
+    }
+    if let Some(kind) = resolved.kind_config(record) {
+        map.insert(
+            "_md".into(),
+            Value::Object(markdown::trees(&record.fields, text_fields(&kind.fields))),
+        );
     }
     Value::Object(map)
 }
@@ -199,14 +216,19 @@ pub fn data(resolved: &Resolved, owner: Option<&str>, date: &str) -> Value {
             .sections
             .iter()
             .find(|s| s.name == section.name)
-            .map(|s| s.records.iter().map(item).collect::<Vec<_>>())
+            .map(|s| {
+                s.records
+                    .iter()
+                    .map(|r| item(resolved, r))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let grouped: Vec<Value> = groups(resolved, &section.name)
             .into_iter()
             .map(|(target, items)| {
                 json!({
-                    "ref": target.map(item),
-                    "items": items.into_iter().map(item).collect::<Vec<_>>(),
+                    "ref": target.map(|r| item(resolved, r)),
+                    "items": items.into_iter().map(|r| item(resolved, r)).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -229,6 +251,7 @@ pub fn data(resolved: &Resolved, owner: Option<&str>, date: &str) -> Value {
             "id": document.id,
             "title": document.title,
             "fields": document.fields,
+            "_md": markdown::trees(&document.fields, text_fields(&config.document.fields)),
             "approved": document.approved,
             "approved_at": document.approved_at,
         },
@@ -387,7 +410,7 @@ pub fn markdown(resolved: &Resolved) -> String {
     let mut out = format!("# {}\n", outline.title);
     for (title, value, long) in &outline.fields {
         if *long {
-            out.push_str(&format!("\n{value}\n"));
+            out.push_str(&format!("\n## {title}\n\n{}\n", value.trim_end()));
         } else {
             out.push_str(&format!("\n**{title}:** {value}\n"));
         }
@@ -410,22 +433,13 @@ pub fn markdown(resolved: &Resolved) -> String {
     out
 }
 
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
 pub fn html(resolved: &Resolved) -> String {
     let outline = outline(resolved);
     let mut body = format!("<h1>{}</h1>\n", escape(&outline.title));
     for (title, value, long) in &outline.fields {
         if *long {
-            for paragraph in value.split("\n\n") {
-                body.push_str(&format!("<p>{}</p>\n", escape(paragraph.trim())));
-            }
+            body.push_str(&format!("<h2>{}</h2>\n", escape(title)));
+            body.push_str(&markdown::html(value, 2));
         } else {
             body.push_str(&format!(
                 "<p><strong>{}:</strong> {}</p>\n",
