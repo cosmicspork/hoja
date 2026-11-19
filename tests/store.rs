@@ -339,7 +339,7 @@ fn every_revision_records_its_author() {
 }
 
 #[test]
-fn agents_cannot_review_approve_delete_or_write_person_only_fields() {
+fn agents_cannot_review_approve_delete_or_change_person_only_fields() {
     let f = Fixture::new();
     let item = applied(
         create(
@@ -388,19 +388,55 @@ fn agents_cannot_review_approve_delete_or_write_person_only_fields() {
         f.store.update_document(&agent(), &doc.id, summary),
         Err(StoreError::Refused(_))
     ));
-    let with_summary = CreateDocument {
-        type_name: "status-report".into(),
-        title: "Nov".into(),
-        fields: obj(json!({"period": "2026-11", "summary": "x"})),
-        note: String::new(),
-    };
-    assert!(matches!(
-        f.store.create_document(&agent(), with_summary),
-        Err(StoreError::Refused(_))
-    ));
     assert!(matches!(
         f.store.approvals(Some("pending")).unwrap().len(),
         0
+    ));
+}
+
+#[test]
+fn a_new_entry_may_propose_person_only_fields_on_a_card() {
+    let f = Fixture::new();
+    // A person-only value on create, even in an agent-drafted type, is a card.
+    let with_summary = CreateDocument {
+        type_name: "status-report".into(),
+        title: "Nov".into(),
+        fields: obj(json!({"period": "2026-11", "summary": "From the old report"})),
+        note: "moved in from the previous report".into(),
+    };
+    let id = card(f.store.create_document(&agent(), with_summary).unwrap());
+    let accepted = accept(&f.store, &id, None).unwrap();
+    let doc_id = accepted.result.unwrap()["document_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let doc = f.store.document(&doc_id).unwrap();
+    assert_eq!(doc.fields["summary"], "From the old report");
+    let revisions = f.store.revisions("document", &doc_id).unwrap();
+    assert_eq!(revisions[0].author, Author::AgentAccepted);
+
+    // Once it exists, the agent can neither change nor suggest the field.
+    let change = UpdateDocument {
+        version: doc.version,
+        title: None,
+        fields: obj(json!({"summary": "Better"})),
+        note: String::new(),
+    };
+    assert!(matches!(
+        f.store.update_document(&agent(), &doc_id, change),
+        Err(StoreError::Refused(_))
+    ));
+
+    // A human-drafted type still refuses agent first drafts outright.
+    assert!(matches!(
+        create(
+            &f.store,
+            &agent(),
+            "resume",
+            "role",
+            json!({"employer": "Acme"})
+        ),
+        Err(StoreError::Refused(_))
     ));
 }
 

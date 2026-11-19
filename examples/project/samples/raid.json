@@ -2,22 +2,31 @@
   "title": "Field inspections: RAID log",
   "fields": {
     "project": "Field inspections",
+    "target_date": "2027-01-29",
     "as_of": "2026-11-14",
+    "review": "Weekly inspections sync",
+    "refs": ["INSP", "INSP-400"],
     "notes": "Two risks moved to **mitigating** this week. The county pilot depends on the redaction service, now *at risk*."
   },
   "sections": {
     "risks": [
-      {"fields": {"key": "R-001", "title": "Offline sync conflicts lose inspector edits", "description": "Because two inspectors can edit the same report offline, the later sync might overwrite the earlier one, which would lose findings.", "likelihood": "medium", "severity": "high", "owner": "Sam Rivera", "status": "mitigating", "mitigation": "Field-level merge shipped in !218.\n\n- Monitor conflict rate weekly\n- Escalate if it passes 1%", "raised": "2026-09-30", "review_by": "2026-12-01", "refs": ["INSP-402"]}},
-      {"fields": {"key": "R-002", "title": "County IT blocks the photo upload domain", "description": "County firewalls block unknown domains by default.", "likelihood": "high", "severity": "medium", "owner": "Priya Nair", "status": "open", "mitigation": "Ask both pilot counties to allowlist the domain before go-live.", "raised": "2026-10-21", "review_by": "2026-11-20", "refs": ["INSP-441"]}}
+      {"fields": {"key": "R-001", "title": "If two inspectors edit the same report offline, then the later sync overwrites the earlier one and findings are lost.", "likelihood": "medium", "severity": "high", "owner": "Sam Rivera", "status": "mitigating", "mitigation": "Field-level merge shipped in !218.\n\n- Monitor conflict rate weekly\n- Escalate if it passes 1%", "raised": "2026-09-30", "review_by": "2026-12-01", "related": ["DEC-002"], "refs": ["INSP-402"]}},
+      {"fields": {"key": "R-002", "title": "If county IT blocks the photo upload domain, then the pilot can't start on time.", "likelihood": "high", "severity": "medium", "owner": "Priya Nair", "status": "open", "mitigation": "Ask both pilot counties to allowlist the domain before go-live.", "raised": "2026-10-21", "related": ["D-001"], "refs": ["INSP-441"]}}
     ],
     "assumptions": [
-      {"fields": {"key": "A-001", "title": "Inspectors have a phone with a camera", "description": "Every county issues one; confirm for the pilot sites.", "owner": "Priya Nair", "status": "unvalidated", "validate_by": "2026-11-30"}}
+      {"fields": {"key": "A-001", "title": "Every inspector has a phone with a camera.", "basis": "County equipment list, 2026-10", "impact": "Photo capture needs a tablet fallback.", "validation": "Confirm with both pilot sites.", "status": "unvalidated", "raised": "2026-10-02"}},
+      {"fields": {"key": "A-002", "title": "Reports stay under 300 photos.", "basis": "Last year's report sizes", "impact": "Export needs streaming.", "validation": "Checked against 2025 reports.", "status": "valid", "raised": "2026-10-02"}}
     ],
     "issues": [
-      {"fields": {"key": "I-001", "title": "Report export times out for reports with 200+ photos", "severity": "high", "owner": "Sam Rivera", "status": "in_progress", "resolution": "Batching uploads cut the median from 9 seconds to 2; large reports still slow.", "raised": "2026-10-02", "due": "2026-11-21", "refs": ["INSP-412"]}}
+      {"fields": {"key": "I-001", "title": "Report export times out for reports with 200+ photos", "severity": "high", "owner": "Sam Rivera", "status": "in_progress", "action": "Stream the export instead of building it in memory.", "raised": "2026-10-02", "due": "2026-11-21", "refs": ["INSP-412"]}}
     ],
     "dependencies": [
-      {"fields": {"key": "D-001", "title": "Photo redaction service in production", "on": "Platform team", "owner": "Sam Rivera", "status": "at_risk", "needed_by": "2026-12-05", "refs": ["PLAT-77"]}}
+      {"fields": {"key": "D-001", "title": "Photo redaction service in production", "on": "Platform team", "impact": "The county pilot can't start.", "notes": "Asked at the roadmap review; no date yet.", "owner": "Sam Rivera", "status": "at_risk", "raised": "2026-10-14", "needed_by": "2026-12-05", "refs": ["PLAT-77"]}},
+      {"fields": {"key": "D-002", "title": "Pilot county contacts", "on": "County liaison", "impact": "Training can't be scheduled.", "owner": "Priya Nair", "status": "met", "raised": "2026-10-02"}}
+    ],
+    "decisions": [
+      {"fields": {"key": "DEC-001", "date": "2026-09-15", "title": "Pilot with two counties before statewide rollout.", "rationale": "Limits the blast radius of sync bugs.", "decided_by": "Steering group"}},
+      {"fields": {"key": "DEC-002", "date": "2026-10-01", "title": "Merge offline edits field by field.", "rationale": "Last-write-wins lost findings in testing.", "decided_by": "Sam Rivera, Priya Nair", "notes": "Shipped in !218.", "related": ["R-001"]}}
     ]
   }
 }

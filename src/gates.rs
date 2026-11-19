@@ -74,13 +74,20 @@ pub fn route(actor: &Actor, config: &TypeConfig, write: Write<'_>) -> Route {
         None => Some(&config.document.fields),
         Some(kind) => config.kind(kind).map(|k| &k.fields),
     };
-    if let Some(declared) = declared
-        && let Some(name) = write
+    let person_only = declared.and_then(|declared| {
+        write
             .fields
             .iter()
             .find(|name| declared.get(*name).is_some_and(|f| f.person_only))
-    {
-        return Route::Refused(format!("`{name}` is written only by the person"));
+    });
+    if let Some(name) = person_only {
+        // A new entry may carry the person's ratings (an existing log being
+        // moved in, say) as a proposal they accept once. Changing one never
+        // comes from an agent.
+        if write.op != Op::Create || config.first_draft == FirstDraft::Human {
+            return Route::Refused(format!("`{name}` is written only by the person"));
+        }
+        return Route::Card;
     }
     if config.first_draft == FirstDraft::Human {
         return if write.op == Op::Create {
@@ -146,19 +153,42 @@ person_only = true
     }
 
     #[test]
-    fn agents_never_write_person_only_fields() {
+    fn agents_never_change_person_only_fields() {
         for c in [config("human", true), config("agent", true)] {
             let secret = ["secret".to_string()];
             let summary = ["summary".to_string()];
             for w in [
                 write(Op::Update, Some("item"), false, &secret),
-                write(Op::Create, Some("item"), false, &secret),
                 write(Op::Update, None, false, &summary),
-                write(Op::Create, None, false, &summary),
             ] {
                 assert!(matches!(route(&agent(), &c, w), Route::Refused(_)), "{w:?}");
             }
         }
+        let c = config("human", true);
+        let secret = ["secret".to_string()];
+        assert!(matches!(
+            route(
+                &agent(),
+                &c,
+                write(Op::Create, Some("item"), false, &secret)
+            ),
+            Route::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn a_new_entry_with_person_only_fields_is_always_a_card() {
+        let c = config("agent", true);
+        let both = ["text".to_string(), "secret".to_string()];
+        let summary = ["summary".to_string()];
+        assert_eq!(
+            route(&agent(), &c, write(Op::Create, Some("item"), false, &both)),
+            Route::Card
+        );
+        assert_eq!(
+            route(&agent(), &c, write(Op::Create, None, false, &summary)),
+            Route::Card
+        );
     }
 
     #[test]

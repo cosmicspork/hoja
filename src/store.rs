@@ -8,7 +8,8 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::config::{
-    FieldType, KindConfig, TypeConfig, TypeFile, apply_patch, canonical_json, sha256_hex,
+    FieldType, KindConfig, SectionConfig, TypeConfig, TypeFile, apply_patch, canonical_json,
+    sha256_hex,
 };
 use crate::gates::{self, Actor, Author, Op, Route, Write};
 use crate::lint;
@@ -158,7 +159,7 @@ impl Resolved {
             "title": config.title,
             "sections": config.document.sections.iter().map(|s| json!({
                 "name": s.name, "title": s.title, "type": s.from_type, "kind": s.kind,
-                "item": s.item, "group_by": s.group_by,
+                "item": s.item, "group_by": s.group_by, "include": s.include, "sort": s.sort,
             })).collect::<Vec<_>>(),
             "fields": config.document.fields.iter().map(|(n, f)| (n.clone(), json!(f.title))).collect::<Map<_, _>>(),
         });
@@ -846,12 +847,17 @@ impl Store {
         let mut missing = Vec::new();
         let mut refs = HashMap::new();
         for section in &config.document.sections {
-            let ids = document
-                .sections
-                .iter()
-                .find(|s| s.name == section.name)
-                .map(|s| s.record_ids.clone())
-                .unwrap_or_default();
+            let ids = if section.includes_all() {
+                let source = config.section_type(section, &document.type_name);
+                matching_ids(connection, source, section)?
+            } else {
+                document
+                    .sections
+                    .iter()
+                    .find(|s| s.name == section.name)
+                    .map(|s| s.record_ids.clone())
+                    .unwrap_or_default()
+            };
             let mut records = Vec::new();
             for record_id in ids {
                 match load_record(connection, &record_id)? {
@@ -1261,9 +1267,10 @@ impl Store {
                 })?;
                 let patch = fields_of(payload);
                 let names: Vec<String> = patch.keys().cloned().collect();
-                // A person's acceptance stands in for the agent, so only the person-only check applies.
+                // A person's acceptance stands in for the agent, so only the
+                // gates on what an agent may propose apply.
                 recheck(Write {
-                    op: Op::Update,
+                    op: Op::Create,
                     kind: Some(kind_name),
                     settled: false,
                     fields: &names,
@@ -1297,7 +1304,7 @@ impl Store {
                 let patch = fields_of(payload);
                 let names: Vec<String> = patch.keys().cloned().collect();
                 recheck(Write {
-                    op: Op::Update,
+                    op: Op::Create,
                     kind: None,
                     settled: false,
                     fields: &names,
@@ -1956,6 +1963,11 @@ fn validate_selection(
     let section_config = config
         .section(section)
         .ok_or_else(|| StoreError::Invalid(format!("unknown section `{section}`")))?;
+    if section_config.includes_all() {
+        return Err(StoreError::Invalid(format!(
+            "section `{section}` includes every matching record, so it isn't selected by hand"
+        )));
+    }
     if ids.len() > MAX_SELECTION {
         return Err(StoreError::Invalid(format!(
             "a section holds at most {MAX_SELECTION} records"
@@ -2005,6 +2017,47 @@ fn validate_selection(
         }
     }
     Ok(())
+}
+
+/// The live records an `include = "all"` section holds: its type and kind,
+/// matching its `where` filter, ordered by its `sort` field (records without
+/// one last), then by creation.
+fn matching_ids(
+    connection: &Connection,
+    type_name: &str,
+    section: &SectionConfig,
+) -> Result<Vec<String>, StoreError> {
+    let mut statement = connection
+        .prepare(&format!(
+            "{RECORD_SELECT} WHERE r.deleted_at IS NULL AND r.type=?1 AND r.kind=?2 ORDER BY r.created_at, r.id"
+        ))
+        .map_err(internal)?;
+    let mut records = statement
+        .query_map(params![type_name, section.kind], record_from_row)
+        .map_err(internal)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(internal)?;
+    records.retain(|r| {
+        section
+            .filter
+            .iter()
+            .all(|(field, expected)| r.fields.get(field).and_then(Value::as_str) == Some(expected))
+    });
+    if let Some(sort) = &section.sort {
+        let key = |r: &Record| match r.fields.get(sort) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(other) => Some(other.to_string()),
+        };
+        // Stable, so equal keys keep creation order.
+        records.sort_by(|a, b| match (key(a), key(b)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+    }
+    Ok(records.into_iter().map(|r| r.id).collect())
 }
 
 fn accepted_rows(

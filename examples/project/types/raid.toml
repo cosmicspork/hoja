@@ -1,11 +1,17 @@
-# A RAID log: the project's risks, assumptions, issues and dependencies.
+# A RAID log: the project's risks, assumptions, issues and dependencies,
+# and the decisions that settle them so they aren't reopened later.
 #
 # The person is the only judge: likelihood, severity, owner and status are
 # theirs alone. Agents may log issues and dependencies directly (they arrive
-# unreviewed, strongly highlighted) and may suggest descriptions and
-# mitigations; a new risk or assumption from an agent arrives as a card.
-# The log itself is published, not approved: per-record review is the
-# signal, and approving a document snapshots the version you sent out.
+# unreviewed, strongly highlighted) and may suggest wording; a new risk,
+# assumption or decision from an agent arrives as a card, as does any new
+# entry that already carries a rating, owner or status (moving an existing
+# log in, say). After that, only the person changes those fields.
+#
+# Every section holds every entry of its kind, ordered by ID, so the log
+# can't leave one out. Close entries instead of deleting them. The log is
+# published, not approved: per-entry review is the signal, and approving
+# snapshots the version you sent out.
 title = "RAID log"
 first_draft = "agent"
 template = "raid.typ"
@@ -22,16 +28,17 @@ agent_direct = false
 [kinds.risk.fields.key]
 type = "string"
 title = "ID"
-help = "R-001, R-002, ..."
+help = "R-001, R-002, ... Never reuse one."
 
 [kinds.risk.fields.title]
 type = "string"
+title = "Risk"
 required = true
-help = "What might happen, in a few words."
+help = "If this happens, then that follows."
 
 [kinds.risk.fields.description]
 type = "text"
-help = "Cause and effect: because of X, Y might happen, which would Z."
+help = "Cause and context, if the statement doesn't carry it."
 
 [kinds.risk.fields.likelihood]
 type = "enum"
@@ -42,6 +49,7 @@ person_only = true
 type = "enum"
 options = ["low", "medium", "high", "critical"]
 person_only = true
+help = "High: could slip the target date. Medium: could slip a milestone or cause rework. Low: minor."
 
 [kinds.risk.fields.owner]
 type = "string"
@@ -63,6 +71,11 @@ type = "date"
 type = "date"
 title = "Review by"
 
+[kinds.risk.fields.related]
+type = "list"
+title = "Related"
+help = "IDs of linked entries: D-001, DEC-010."
+
 [kinds.risk.fields.refs]
 type = "list"
 title = "References"
@@ -82,12 +95,21 @@ help = "A-001, A-002, ..."
 
 [kinds.assumption.fields.title]
 type = "string"
+title = "Assumption"
 required = true
 help = "What we're taking as true."
 
-[kinds.assumption.fields.description]
+[kinds.assumption.fields.basis]
+type = "string"
+help = "Why we believe it: a meeting, a document, someone's read."
+
+[kinds.assumption.fields.impact]
 type = "text"
-help = "Why we assume it, and what changes if it's wrong."
+title = "Impact if wrong"
+
+[kinds.assumption.fields.validation]
+type = "text"
+title = "How to validate"
 
 [kinds.assumption.fields.owner]
 type = "string"
@@ -98,9 +120,16 @@ type = "enum"
 options = ["unvalidated", "valid", "invalid"]
 person_only = true
 
+[kinds.assumption.fields.raised]
+type = "date"
+
 [kinds.assumption.fields.validate_by]
 type = "date"
 title = "Validate by"
+
+[kinds.assumption.fields.related]
+type = "list"
+title = "Related"
 
 [kinds.assumption.fields.refs]
 type = "list"
@@ -119,6 +148,7 @@ help = "I-001, I-002, ..."
 
 [kinds.issue.fields.title]
 type = "string"
+title = "Issue"
 required = true
 help = "What is going wrong now, in a few words."
 
@@ -129,6 +159,7 @@ type = "text"
 type = "enum"
 options = ["low", "medium", "high", "critical"]
 person_only = true
+help = "High: slipping the target date. Medium: slipping a milestone or causing rework. Low: minor."
 
 [kinds.issue.fields.owner]
 type = "string"
@@ -139,6 +170,10 @@ type = "enum"
 options = ["open", "in_progress", "resolved"]
 person_only = true
 
+[kinds.issue.fields.action]
+type = "text"
+title = "Next action"
+
 [kinds.issue.fields.resolution]
 type = "text"
 
@@ -147,6 +182,10 @@ type = "date"
 
 [kinds.issue.fields.due]
 type = "date"
+
+[kinds.issue.fields.related]
+type = "list"
+title = "Related"
 
 [kinds.issue.fields.refs]
 type = "list"
@@ -165,16 +204,22 @@ help = "D-001, D-002, ..."
 
 [kinds.dependency.fields.title]
 type = "string"
+title = "Dependency"
 required = true
 help = "What we need, in a few words."
 
 [kinds.dependency.fields.on]
 type = "string"
 title = "Depends on"
-help = "The team, vendor or deliverable we're waiting on."
+help = "The person, team, vendor or deliverable we're waiting on."
 
-[kinds.dependency.fields.description]
+[kinds.dependency.fields.impact]
 type = "text"
+title = "Impact if late"
+
+[kinds.dependency.fields.notes]
+type = "text"
+help = "Where it stands: when we asked, what we heard back."
 
 [kinds.dependency.fields.owner]
 type = "string"
@@ -182,14 +227,63 @@ person_only = true
 
 [kinds.dependency.fields.status]
 type = "enum"
-options = ["pending", "at_risk", "met", "missed"]
+options = ["waiting", "on_track", "at_risk", "met", "missed"]
 person_only = true
+
+[kinds.dependency.fields.raised]
+type = "date"
 
 [kinds.dependency.fields.needed_by]
 type = "date"
 title = "Needed by"
 
+[kinds.dependency.fields.related]
+type = "list"
+title = "Related"
+
 [kinds.dependency.fields.refs]
+type = "list"
+title = "References"
+
+# ---- decisions -----------------------------------------------------------
+
+[kinds.decision]
+title = "Decision"
+label = "title"
+agent_direct = false
+
+[kinds.decision.fields.key]
+type = "string"
+title = "ID"
+help = "DEC-001, DEC-002, ..."
+
+[kinds.decision.fields.title]
+type = "string"
+title = "Decision"
+required = true
+help = "What was agreed, as it was agreed."
+
+[kinds.decision.fields.rationale]
+type = "text"
+
+[kinds.decision.fields.decided_by]
+type = "string"
+title = "Decided by"
+help = "The people, or the meeting."
+
+[kinds.decision.fields.date]
+type = "date"
+title = "Decided"
+
+[kinds.decision.fields.notes]
+type = "text"
+help = "Follow-ups, or what superseded it."
+
+[kinds.decision.fields.related]
+type = "list"
+title = "Related"
+
+[kinds.decision.fields.refs]
 type = "list"
 title = "References"
 
@@ -199,9 +293,23 @@ title = "References"
 type = "string"
 required = true
 
+[document.fields.target_date]
+type = "date"
+title = "Target date"
+
 [document.fields.as_of]
 type = "date"
 title = "As of"
+
+[document.fields.review]
+type = "string"
+title = "Reviewed at"
+help = "Where the log is reviewed, e.g. the bi-weekly project sync."
+
+[document.fields.refs]
+type = "list"
+title = "Tracking"
+help = "Jira keys for the project and its epic."
 
 [document.fields.notes]
 type = "text"
@@ -212,25 +320,41 @@ help = "Anything a reader needs before the tables, in your own words."
 name = "risks"
 title = "Risks"
 kind = "risk"
-item = "{key} {title} [{severity}] ({status})"
+include = "all"
+sort = "key"
+item = "{key} {title} [{likelihood}/{severity}] ({status})"
 
 [[document.sections]]
 name = "assumptions"
 title = "Assumptions"
 kind = "assumption"
+include = "all"
+sort = "key"
 item = "{key} {title} ({status})"
 
 [[document.sections]]
 name = "issues"
 title = "Issues"
 kind = "issue"
+include = "all"
+sort = "key"
 item = "{key} {title} [{severity}] ({status})"
 
 [[document.sections]]
 name = "dependencies"
 title = "Dependencies"
 kind = "dependency"
+include = "all"
+sort = "key"
 item = "{key} {title} [{on}] ({status})"
+
+[[document.sections]]
+name = "decisions"
+title = "Decisions"
+kind = "decision"
+include = "all"
+sort = "key"
+item = "{key} {title} ({decided_by}, {date})"
 
 # IDs: one per entry, in the kind's own series.
 [[lints]]
@@ -251,6 +375,11 @@ field = "key"
 [[lints]]
 rule = "unique"
 kind = "dependency"
+field = "key"
+
+[[lints]]
+rule = "unique"
+kind = "decision"
 field = "key"
 
 [[lints]]
@@ -289,6 +418,56 @@ min = 1
 level = "warn"
 message = "give it an ID like D-001"
 
+[[lints]]
+rule = "match"
+kind = "decision"
+field = "key"
+pattern = '^DEC-[0-9]{3}$'
+min = 1
+level = "warn"
+message = "give it an ID like DEC-001"
+
+# Links name entries by ID.
+[[lints]]
+rule = "match"
+kind = "risk"
+field = "related"
+pattern = '^(R|A|I|D|DEC)-[0-9]{3}$'
+level = "warn"
+message = "link entries by ID, like D-001"
+
+[[lints]]
+rule = "match"
+kind = "assumption"
+field = "related"
+pattern = '^(R|A|I|D|DEC)-[0-9]{3}$'
+level = "warn"
+message = "link entries by ID, like D-001"
+
+[[lints]]
+rule = "match"
+kind = "issue"
+field = "related"
+pattern = '^(R|A|I|D|DEC)-[0-9]{3}$'
+level = "warn"
+message = "link entries by ID, like D-001"
+
+[[lints]]
+rule = "match"
+kind = "dependency"
+field = "related"
+pattern = '^(R|A|I|D|DEC)-[0-9]{3}$'
+level = "warn"
+message = "link entries by ID, like D-001"
+
+[[lints]]
+rule = "match"
+kind = "decision"
+field = "related"
+pattern = '^(R|A|I|D|DEC)-[0-9]{3}$'
+level = "warn"
+message = "link entries by ID, like D-001"
+
 # Triage: an entry an agent logged waits for your judgment.
 [[lints]]
 rule = "require"
@@ -313,6 +492,13 @@ message = "name an owner"
 
 [[lints]]
 rule = "require"
+kind = "assumption"
+field = "status"
+level = "warn"
+message = "set a status"
+
+[[lints]]
+rule = "require"
 kind = "issue"
 field = "severity"
 level = "warn"
@@ -331,6 +517,13 @@ kind = "dependency"
 field = "status"
 level = "warn"
 message = "set a status"
+
+[[lints]]
+rule = "require"
+kind = "dependency"
+field = "owner"
+level = "warn"
+message = "name an owner"
 
 [[lints]]
 rule = "forbid"
