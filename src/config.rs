@@ -122,6 +122,33 @@ pub struct SectionConfig {
     /// Markdown/HTML line for one item, e.g. `"{text} ({refs})"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<String>,
+    /// `all` holds every live record of `kind` matching `where`, instead of a
+    /// hand-picked selection, so a log can't silently leave an entry out.
+    #[serde(default, skip_serializing_if = "Include::is_selected")]
+    pub include: Include,
+    /// For an `all` section: the field records are ordered by, then creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Include {
+    #[default]
+    Selected,
+    All,
+}
+
+impl Include {
+    fn is_selected(&self) -> bool {
+        *self == Self::Selected
+    }
+}
+
+impl SectionConfig {
+    pub fn includes_all(&self) -> bool {
+        self.include == Include::All
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -308,6 +335,12 @@ impl TypeConfig {
                 bail!("invalid or duplicate section name `{}`", section.name);
             }
             seen.push(&section.name);
+            if section.sort.is_some() && !section.includes_all() {
+                bail!(
+                    "section `{}` sorts, which only an `include = \"all\"` section can",
+                    section.name
+                );
+            }
             if let Some(other) = &section.from_type {
                 // The other type is checked when a record is selected, since
                 // it is accepted separately and may change on its own.
@@ -335,6 +368,11 @@ impl TypeConfig {
                         section.name
                     );
                 }
+            }
+            if let Some(sort) = &section.sort
+                && !kind.fields.contains_key(sort)
+            {
+                bail!("section `{}` sorts by unknown field `{sort}`", section.name);
             }
             if let Some(group) = &section.group_by
                 && kind
@@ -797,6 +835,9 @@ required = true
             "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[lints]]\nrule = \"forbid\"\npattern = \"(\"",
             "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[lints]]\nrule = \"require\"\nkind = \"a\"\nfield = \"x\"",
             "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[lints]]\nrule = \"max_items\"\nsection = \"x\"\nmax = 1\nextra = 2",
+            "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[document.sections]]\nname = \"s\"\nkind = \"a\"\nsort = \"t\"",
+            "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[document.sections]]\nname = \"s\"\nkind = \"a\"\ninclude = \"all\"\nsort = \"nope\"",
+            "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[document.sections]]\nname = \"s\"\nkind = \"a\"\ninclude = \"some\"",
         ] {
             assert!(TypeConfig::parse(body).is_err(), "{body}");
         }

@@ -688,6 +688,88 @@ async fn reports_select_from_the_raid_log_under_its_own_gates() {
     );
 }
 
+#[tokio::test]
+async fn the_raid_log_holds_every_entry_and_takes_rated_ones_as_cards() {
+    let server = start().await;
+    server.accept_types().await;
+    let server = &server;
+    let post = |body: Value| async move {
+        server
+            .send(server.agent("POST", "/api/agent/records", &body.to_string()))
+            .await
+    };
+
+    // An existing log moving in: an entry with the person's ratings is a card
+    // even for a kind agents otherwise log directly.
+    let rated = json!({"type": "raid", "kind": "dependency", "note": "From the old log",
+        "fields": {"key": "D-002", "title": "Namespace", "owner": "Sam Rivera", "status": "met"}});
+    let (status, out) = post(rated).await;
+    assert_eq!(status, 202, "{out}");
+    let card = out["approval_id"].as_str().unwrap().to_string();
+    let (status, out) = server
+        .send(server.person(
+            "POST",
+            &format!("/api/approvals/{card}/decide"),
+            r#"{"decision":"accept"}"#,
+        ))
+        .await;
+    assert_eq!(status, 200, "{out}");
+    let accepted = out["result"]["record_id"].as_str().unwrap().to_string();
+    // Once it exists, changing a rating never comes from an agent.
+    let rerate = json!({"version": 1, "fields": {"status": "missed"}}).to_string();
+    let (status, _) = server
+        .send(server.agent("POST", &format!("/api/agent/records/{accepted}"), &rerate))
+        .await;
+    assert_eq!(status, 403);
+
+    // An unrated dependency an agent logs directly, out of ID order.
+    let (status, out) = post(json!({"type": "raid", "kind": "dependency",
+        "fields": {"key": "D-001", "title": "Wireframes", "on": "Design"}}))
+    .await;
+    assert_eq!(status, 200, "{out}");
+
+    let doc =
+        json!({"type": "raid", "title": "RAID", "fields": {"project": "Inspections"}}).to_string();
+    let (_, created) = server
+        .send(server.person("POST", "/api/documents", &doc))
+        .await;
+    let id = created["result"]["id"].as_str().unwrap().to_string();
+    let (_, view) = server
+        .send(server.person("GET", &format!("/api/documents/{id}"), ""))
+        .await;
+    let deps = named(&view["provenance"]["sections"], "name", "dependencies");
+    let labels: Vec<&str> = deps["groups"][0]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, vec!["Wireframes", "Namespace"]);
+
+    // Every-entry sections aren't picked by hand, by anyone.
+    let pick = json!({"version": 1, "record_ids": [accepted]}).to_string();
+    let (status, _) = server
+        .send(server.person(
+            "PUT",
+            &format!("/api/documents/{id}/sections/dependencies"),
+            &pick,
+        ))
+        .await;
+    assert_eq!(status, 400);
+
+    // A new entry changes what the log shows, so an approved snapshot returns to draft.
+    let (status, approved) = server.approve(&id).await;
+    assert_eq!(status, 200, "{approved}");
+    let (status, _) = post(json!({"type": "raid", "kind": "issue",
+        "fields": {"key": "I-001", "title": "Export times out"}}))
+    .await;
+    assert_eq!(status, 200);
+    let (_, view) = server
+        .send(server.person("GET", &format!("/api/documents/{id}"), ""))
+        .await;
+    assert_eq!(view["document"]["approved"], false);
+}
+
 fn named<'a>(list: &'a Value, key: &str, name: &str) -> &'a Value {
     list.as_array()
         .unwrap()

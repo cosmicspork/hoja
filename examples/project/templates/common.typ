@@ -21,7 +21,7 @@
       counter(page).display("1 of 1", both: true)
     },
   )
-  set text(font: ("Liberation Sans", "Noto Sans"), size: 10pt)
+  set text(font: ("Liberation Sans", "Noto Sans", "Helvetica Neue", "Arial"), size: 10pt)
   set par(justify: false, leading: 0.62em, spacing: 0.9em)
   show heading.where(level: 1): set text(size: 13pt, fill: accent)
   show heading.where(level: 2): set text(size: 11pt)
@@ -54,7 +54,8 @@
   mitigating: rgb("#9a5b13"),
   in_progress: rgb("#9a5b13"),
   at_risk: rgb("#9a5b13"),
-  pending: luma(110),
+  waiting: luma(110),
+  on_track: accent,
   unvalidated: luma(110),
   closed: accent,
   resolved: accent,

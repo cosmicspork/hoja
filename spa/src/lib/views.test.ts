@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { FieldConfig, HojaRecord, SectionConfig } from './api';
-import { collapse, eligible, fieldChanges, fromForm, href, lineDiff, move, parseRoute, patch, toForm, valueDiff, wordDiff } from './views';
+import { collapse, eligible, included, fieldChanges, fromForm, href, lineDiff, move, parseRoute, patch, toForm, valueDiff, wordDiff } from './views';
 
 const text: FieldConfig = { type: 'text', required: false, person_only: false };
 const tags: FieldConfig = { type: 'tags', required: false, person_only: false };
@@ -106,4 +106,17 @@ test('valueDiff compares list entries and scalars', () => {
   ]);
   expect(valueDiff(undefined, 'new')).toEqual([{ kind: 'add', text: 'new' }]);
   expect(valueDiff(true, null)).toEqual([{ kind: 'remove', text: 'yes' }]);
+});
+
+test('included sorts every eligible record by its sort field, missing last', () => {
+  const section: SectionConfig = { name: 'deps', kind: 'item', include: 'all', sort: 'key' };
+  const records = [
+    record('1', 'item', { key: 'D-002' }),
+    record('2', 'item', {}),
+    record('3', 'item', { key: 'D-001' }),
+    record('4', 'item', { key: 'D-000' }, true),
+    record('5', 'item', {})
+  ];
+  expect(included(records, section, 't').map(r => r.id)).toEqual(['3', '1', '2', '5']);
+  expect(included(records, { ...section, sort: undefined }, 't').map(r => r.id)).toEqual(['1', '2', '3', '5']);
 });

@@ -4,7 +4,7 @@
   import Provenance from './Provenance.svelte';
   import Revisions from './Revisions.svelte';
   import { ApiError, api, message, type DocumentView, type Format, type HojaRecord, type SectionConfig, type TypeConfig } from './lib/api';
-  import { eligible, formOf, href, move, patch, recordLabel, titleOf, when } from './lib/views';
+  import { eligible, formOf, href, included, move, patch, recordLabel, titleOf, when } from './lib/views';
 
   let { id, config, configs, onchange }: { id: string; config: TypeConfig; configs: Record<string, TypeConfig>; onchange: () => void } = $props();
 
@@ -188,6 +188,23 @@
             <h2>{titleOf(section.name, section)}</h2>
             <span class="muted">{titleOf(section.kind, source?.kinds[section.kind])} records{#if section.type} from the {titleOf(section.type, source)}{/if}{#if section.where}, where {Object.entries(section.where).map(([f, v]) => `${f} is ${v}`).join(' and ')}{/if}</span>
           </div>
+          {#if section.include === 'all'}
+            {@const every = included(records, section, doc.type)}
+            <p class="muted">Holds every entry{#if section.sort}, ordered by {titleOf(section.sort, source?.kinds[section.kind]?.fields[section.sort])}{/if}. Add, edit or close entries on the records page.</p>
+            <ol class="chosen">
+              {#each every as record (record.id)}
+                <li>
+                  <span class="label">{labelOf(record)}</span>
+                  {#if !record.reviewed}<span class="badge">not reviewed</span>{/if}
+                </li>
+              {:else}
+                <li class="empty">No entries yet.</li>
+              {/each}
+            </ol>
+            <div class="form-actions">
+              <a class="muted" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
+            </div>
+          {:else}
           <ol class="chosen">
             {#each chosen as recordId, index (recordId)}
               {@const record = byId.get(recordId)}
@@ -219,6 +236,7 @@
             {#if sectionDirty(section.name)}<button type="button" onclick={() => selection[section.name] = [...saved(section.name)]}>Undo</button>{/if}
             <a class="muted" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
           </div>
+          {/if}
         </section>
       {/each}
 

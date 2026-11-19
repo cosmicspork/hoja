@@ -38,6 +38,24 @@ export function eligible(records: HojaRecord[], section: SectionConfig, document
     && Object.entries(section.where ?? {}).every(([field, expected]) => record.fields[field] === expected));
 }
 
+/** What an `include = "all"` section holds: every eligible record, by its
+ * `sort` field (records without one last), then creation, as the server orders them. */
+export function included(records: HojaRecord[], section: SectionConfig, documentType: string): HojaRecord[] {
+  const matching = eligible(records, section, documentType);
+  const sort = section.sort;
+  if (!sort) return matching;
+  const key = (r: HojaRecord) => { const v = r.fields[sort]; return v === undefined || v === null ? null : display(v); };
+  return matching
+    .map((record, index) => ({ record, index, key: key(record) }))
+    .sort((a, b) => {
+      if (a.key !== null && b.key !== null && a.key !== b.key) return a.key < b.key ? -1 : 1;
+      if (a.key === null && b.key !== null) return 1;
+      if (a.key !== null && b.key === null) return -1;
+      return a.index - b.index;
+    })
+    .map(x => x.record);
+}
+
 export function move<T>(list: T[], index: number, delta: number): T[] {
   const target = index + delta;
   if (index < 0 || index >= list.length || target < 0 || target >= list.length) return list;

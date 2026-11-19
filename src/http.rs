@@ -810,7 +810,7 @@ async fn guard(State(app): State<App>, request: Request, next: Next) -> Response
         Some("The agent API takes requests from the hoja CLI, not from browsers.")
     } else if is_agent && !request.headers().contains_key(AGENT_HEADER) {
         Some("Agent requests need an X-Hoja-Agent header.")
-    } else if !is_agent && ((has_origin && !allowed_origin) || (mutation && !allowed_origin)) {
+    } else if !is_agent && !allowed_origin && (has_origin || mutation) {
         Some("Use the local hoja URL.")
     } else {
         None
