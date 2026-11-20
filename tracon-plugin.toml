@@ -1,0 +1,18 @@
+# hoja as a Tracon plugin (contract 1). The node serves the page from ui/ and
+# forwards its api/ requests to `hoja serve --socket <path> --data <dir>`,
+# signed as the operator's. hoja offers no MCP tools, takes no credentials and
+# reaches no network: agents use the hoja CLI against the loopback port
+# `agent_listen` names in <data>/plugin.toml.
+#
+# PDFs are rendered by the host's Typst compiler, a program hoja runs. Name it
+# as `typst` in <data>/plugin.toml, or install it at one of
+# /home/linuxbrew/.linuxbrew/bin, /opt/homebrew/bin, /usr/local/bin or
+# /usr/bin. Markdown and HTML exports need nothing else.
+name = "hoja"
+version = "0.1.0"
+contract = 1
+exec = ["bin/hoja", "serve"]
+
+[ui]
+entry = "ui/index.html"
+title = "hoja"

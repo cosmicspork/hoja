@@ -68,6 +68,34 @@ The example has three types that work together:
 
 `--port` changes the port (default 4520), `--typst` (or `HOJA_TYPST`) picks the Typst binary, and `HOJA_WORKSPACE` can stand in for `--workspace`. Under systemd, `contrib/systemd/` has a socket-activated user service: hoja starts the first time its port is opened.
 
+## As a Tracon plugin
+
+hoja also runs as a [Tracon](https://github.com/cosmicspork/tracon) plugin with a UI. Once a release exists:
+
+```sh
+tracon plugin add cosmicspork/hoja
+```
+
+The node starts `hoja serve --socket <path> --data <dir>` for each channel, serves hoja's page itself, and shows it in Tracon's **Plugins** section. The page's requests reach hoja through the node, each with a context the node signs for the operator; hoja serves its person API only to requests carrying a valid one, in place of the Origin check above. hoja offers no MCP tools and takes no credentials.
+
+The node starts it with an empty environment, so it is configured by an optional `<data>/plugin.toml`:
+
+```toml
+# The workspace. Default: the data directory itself, which then holds
+# hoja.toml, types/, templates/ and hoja.sqlite3. Use an absolute path
+# (there is no HOME to expand ~); a relative one is from the data directory.
+workspace = "/home/you/hoja"
+# The Typst compiler. Default: the first of /home/linuxbrew/.linuxbrew/bin/typst,
+# /opt/homebrew/bin/typst, /usr/local/bin/typst and /usr/bin/typst that exists.
+typst = "/usr/bin/typst"
+# Serve the agent API on this loopback address, for the hoja CLI. Default: off.
+agent_listen = "127.0.0.1:4520"
+```
+
+Pointing `workspace` at an existing workspace, such as `~/hoja`, keeps its data in place. Stop the standalone server first (`systemctl --user stop hoja.socket hoja.service`), since `agent_listen` on 4520 would collide with it and two servers shouldn't share one database.
+
+Agents can't use the plugin socket: every request on it is the operator's, so it refuses `/api/agent/*`. With `agent_listen` set, the CLI keeps working against that port (`HOJA_URL` if it isn't 4520) with the same agent checks as standalone; it serves nothing else. Without it, agents have no way in. Inside Tracon the page is framed and may not display PDF previews; each preview has a download link.
+
 ## Workspaces
 
 A workspace is a directory:
@@ -155,7 +183,11 @@ bun run --cwd spa check
 bun test --cwd spa
 ```
 
-`bun run --cwd spa dev` serves the UI with hot reload and proxies `/api` to a `hoja serve` on port 4520. Gates live in `src/gates.rs` and are enforced in `src/store.rs`; type parsing and value normalization are in `src/config.rs`; lints in `src/lint.rs`; rendering in `src/render.rs`; the template gate in `src/templates.rs`; Markdown in `src/markdown.rs`; the provenance view in `src/provenance.rs`. The HTTP tests in `tests/http.rs` render real PDFs, including every example template from its samples and from placeholders, when `typst` is on `PATH`.
+`bun run --cwd spa dev` serves the UI with hot reload and proxies `/api` to a `hoja serve` on port 4520. Plugin mode is in `src/plugin.rs` and the signed-context check in `src/contract.rs`; `tests/plugin.rs` runs the built binary as a node would. Gates live in `src/gates.rs` and are enforced in `src/store.rs`; type parsing and value normalization are in `src/config.rs`; lints in `src/lint.rs`; rendering in `src/render.rs`; the template gate in `src/templates.rs`; Markdown in `src/markdown.rs`; the provenance view in `src/provenance.rs`. The HTTP tests in `tests/http.rs` render real PDFs, including every example template from its samples and from placeholders, when `typst` is on `PATH`.
+
+## Releases
+
+Releases are cut with [release-please](https://github.com/googleapis/release-please). Each merge to `main` updates a release PR that bumps the version in `Cargo.toml`, `Cargo.lock`, `tracon-plugin.toml` and `spa/package.json` together and writes `CHANGELOG.md` from the conventional-commit PR titles (`feat` bumps the minor version, `fix` the patch, and before 1.0 a breaking change bumps the minor). Merging the release PR tags `v<version>`, creates the GitHub release, and the release workflow attaches `hoja-<version>-<target>.tar.gz` for each target (holding `tracon-plugin.toml`, `bin/hoja` and `ui/`) with `checksums.txt` and build provenance attestations.
 
 ## License
 

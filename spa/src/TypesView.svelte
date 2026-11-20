@@ -222,7 +222,10 @@
         </div>
         <p class="hint">Rendered with every other template as accepted, and with the type file as it is on disk.</p>
         {#if previewError}<pre class="error">{previewError}</pre>{/if}
-        {#if previewUrl}<iframe title="Template preview" src={previewUrl}></iframe>{/if}
+        {#if previewUrl}
+          <iframe title="Template preview" src={previewUrl}></iframe>
+          <a href={previewUrl} download="template-preview.pdf">Download this PDF</a>
+        {/if}
       </div>
     </div>
   </section>

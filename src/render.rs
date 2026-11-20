@@ -532,7 +532,15 @@ impl Typst {
         let run = tokio::time::timeout(TYPST_TIMEOUT, command.output())
             .await
             .map_err(|_| RenderError::Compile("timed out after 60 seconds".into()))?
-            .map_err(|e| RenderError::Io(format!("running {}: {e}", self.binary.display())))?;
+            .map_err(|e| {
+                let hint = if e.kind() == std::io::ErrorKind::NotFound {
+                    ". PDFs need the Typst compiler: install it, or name it with \
+                     --typst (hoja serve) or `typst` in <data>/plugin.toml (as a Tracon plugin)"
+                } else {
+                    ""
+                };
+                RenderError::Io(format!("running {}: {e}{hint}", self.binary.display()))
+            })?;
         if !run.status.success() {
             let stderr = String::from_utf8_lossy(&run.stderr);
             // Typst names files by absolute path or relative to its working

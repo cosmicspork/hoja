@@ -38,15 +38,24 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Serve the web UI and API for one workspace (the person's side).
+    ///
+    /// With --socket, serve as a Tracon plugin instead: the node starts it,
+    /// serves the page itself, and configures it through <data>/plugin.toml.
     Serve {
         /// Directory holding hoja.toml, types/, templates/ and the database.
-        #[arg(long, env = "HOJA_WORKSPACE")]
-        workspace: PathBuf,
+        #[arg(long, env = "HOJA_WORKSPACE", required_unless_present = "socket")]
+        workspace: Option<PathBuf>,
         #[arg(long, default_value_t = 4520)]
         port: u16,
-        /// The Typst compiler.
-        #[arg(long, env = "HOJA_TYPST", default_value = "typst")]
-        typst: PathBuf,
+        /// The Typst compiler [default: typst].
+        #[arg(long, env = "HOJA_TYPST")]
+        typst: Option<PathBuf>,
+        /// Tracon plugin mode: the Unix socket the node names.
+        #[arg(long, requires = "data", conflicts_with_all = ["workspace", "port", "typst"])]
+        socket: Option<PathBuf>,
+        /// Tracon plugin mode: this instance's data directory.
+        #[arg(long, requires = "socket")]
+        data: Option<PathBuf>,
     },
     /// List accepted document types and their fields.
     Types,
@@ -362,10 +371,19 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Serve {
+            socket: Some(socket),
+            data: Some(data),
+            ..
+        } => hoja::plugin::serve(&socket, &data).await,
+        Command::Serve {
             workspace,
             port,
             typst,
-        } => serve(workspace, port, typst).await,
+            ..
+        } => match workspace {
+            Some(workspace) => serve(workspace, port, typst.unwrap_or("typst".into())).await,
+            None => Err(anyhow::anyhow!("hoja serve needs --workspace")),
+        },
         _ => agent_command(cli).await,
     };
     match result {

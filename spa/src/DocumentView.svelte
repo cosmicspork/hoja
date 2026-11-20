@@ -258,7 +258,11 @@
       {:else}
         <p class="hint">A layout check. Read the words in Provenance.</p>
         {#if previewError}<pre class="error">{previewError}</pre>{/if}
-        {#if previewUrl}<iframe title="PDF preview" src={previewUrl}></iframe>{/if}
+        {#if previewUrl}
+          <iframe title="PDF preview" src={previewUrl}></iframe>
+          <!-- Inside Tracon the page is framed and may not show PDFs; the file still downloads. -->
+          <a href={previewUrl} download={view.exports.find(f => f.format === 'pdf')?.filename ?? 'preview.pdf'}>Download this PDF</a>
+        {/if}
       {/if}
     </aside>
   </div>
