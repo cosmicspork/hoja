@@ -6,6 +6,7 @@ pub mod http;
 pub mod lint;
 pub mod markdown;
 pub mod model;
+pub mod node_cards;
 pub mod plugin;
 pub mod provenance;
 pub mod render;

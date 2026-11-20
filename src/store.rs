@@ -75,6 +75,8 @@ CREATE INDEX approvals_state ON approvals(state, created_at);
 ", "
 CREATE TABLE template_files(path TEXT PRIMARY KEY, accepted_hash TEXT NOT NULL, accepted_body BLOB NOT NULL, accepted_at TEXT NOT NULL);
 ALTER TABLE documents ADD COLUMN approved_content TEXT;
+", "
+CREATE TABLE node_cards(card_id TEXT PRIMARY KEY REFERENCES approvals(id), approval_id TEXT NOT NULL UNIQUE, raised_at TEXT NOT NULL);
 "];
 
 /// How a write is attributed in its revision.
@@ -1151,6 +1153,50 @@ impl Store {
             hydrate_approval(&connection, approval)?;
         }
         Ok(approvals)
+    }
+
+    /// Record that card `card_id` was raised in Tracon as `approval_id`
+    /// (`crate::node_cards`). A card is raised once.
+    pub fn link_node_card(&self, card_id: &str, approval_id: &str) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO node_cards(card_id, approval_id, raised_at) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(card_id) DO NOTHING",
+                params![card_id, approval_id, now_utc()],
+            )
+            .map_err(internal)?;
+        Ok(())
+    }
+
+    /// The Tracon approval card `card_id` was raised as, if it was.
+    pub fn node_card(&self, card_id: &str) -> Result<Option<String>, StoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT approval_id FROM node_cards WHERE card_id=?1",
+                params![card_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(internal)
+    }
+
+    /// `(card, Tracon approval)` for each card raised in Tracon that is
+    /// still pending here, oldest first.
+    pub fn node_cards_waiting(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT n.card_id, n.approval_id FROM node_cards n JOIN approvals a ON a.id=n.card_id \
+                 WHERE a.state='pending' ORDER BY n.raised_at, n.card_id",
+            )
+            .map_err(internal)?;
+        statement
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(internal)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(internal)
     }
 
     pub fn approval(&self, id: &str) -> Result<Approval, StoreError> {

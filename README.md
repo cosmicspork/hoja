@@ -41,6 +41,10 @@ An agent request that needs the person returns immediately:
 
 `hoja wait <approval_id>` long-polls for up to 45 seconds and returns `still_waiting` (ask again with the same id), `accepted` (with the result), `rejected` or `changes_requested` (with the person's reason). This is the same non-blocking shape as Tracon's approval queue, so cards can move there once Tracon supports plugins. Identical pending requests share one card.
 
+### Cards in Tracon's queue
+
+When hoja runs as a Tracon plugin, a card can be raised in the operator's Tracon queue instead of hoja's own (`src/node_cards.rs`). The node gives the plugin a socket for calling it back; hoja asks it for a card (`approval/request`) showing the agent's change as a word diff per field, with the agent's note, and reads the decision (`approval/status`). The card is still hoja's: it is linked to the Tracon approval, and once the operator decides there, hoja decides it here as the person. An approval accepts it, so the revision is `agent_accepted` under the agent's name. A rejection, a request for changes or an expiry rejects it or sends it back with the operator's words. A card whose target moved since the agent read it is rejected as stale, never applied. Raised for an agent's call through Tracon, the card carries that call's signed caller context, so the node files it with the agent's session, and the agent's name is taken from the same context rather than from the agent. hoja's own queue is unchanged for standalone use.
+
 ### What this is not
 
 hoja is a protocol between you and an agent that uses its CLI. It is not a sandbox. The server listens only on loopback; person routes require the page's own Origin; the agent API rejects any request with a browser Origin and requires an `X-Hoja-Agent` header, so web pages can't reach either. An agent running on your machine as you can still read the database file or forge headers with `curl`. Run agents you don't trust in an environment that can't reach the workspace, as Tracon's managed sessions do.
