@@ -17,15 +17,15 @@ listenfd = "1"
 mime_guess = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
 rust-embed = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
+sha2 = "0.11"
 similar = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "sync", "process"] }
-toml = { version = "0.9", features = ["preserve_order"] }
+toml = { version = "1.2", features = ["preserve_order"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
