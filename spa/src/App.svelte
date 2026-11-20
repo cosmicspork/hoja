@@ -55,7 +55,7 @@
 
 <div class="app-shell">
   <nav class="sidebar" aria-label="Sections">
-    <a class="brand" href={href({ view: 'documents' })}><img src="/hoja.svg" alt="" width="26" height="26" /> hoja</a>
+    <a class="brand" href={href({ view: 'documents' })}><img src="./hoja.svg" alt="" width="26" height="26" /> hoja</a>
     <a class="nav" class:active={active({ view: 'documents' })} href={href({ view: 'documents' })}>Documents</a>
     <a class="nav" class:active={active({ view: 'approvals' })} href={href({ view: 'approvals' })}>
       Approvals {#if app?.pending_approvals}<span class="count">{app.pending_approvals}</span>{/if}

@@ -192,36 +192,36 @@ const query = (params: Record<string, string | undefined>) => {
 };
 
 export const api = {
-  state: () => request<AppState>('/api/state'),
-  typeChange: (name: string) => request<TypeChange>(`/api/types/${id(name)}/change`),
-  acceptType: (name: string, hash: string) => request<unknown>(`/api/types/${id(name)}/accept`, json('POST', { hash })),
-  templateChange: (path: string) => request<TemplateChange>(`/api/templates/change${query({ path })}`),
-  acceptTemplate: (path: string, hash: string) => request<unknown>('/api/templates/accept', json('POST', { path, hash })),
+  state: () => request<AppState>('api/state'),
+  typeChange: (name: string) => request<TypeChange>(`api/types/${id(name)}/change`),
+  acceptType: (name: string, hash: string) => request<unknown>(`api/types/${id(name)}/accept`, json('POST', { hash })),
+  templateChange: (path: string) => request<TemplateChange>(`api/templates/change${query({ path })}`),
+  acceptTemplate: (path: string, hash: string) => request<unknown>('api/templates/accept', json('POST', { path, hash })),
   templatePreview: async (path: string, hash: string, type: string, document?: string) =>
-    (await send('/api/templates/preview', json('POST', { path, hash, type, ...(document ? { document } : {}) }))).blob(),
+    (await send('api/templates/preview', json('POST', { path, hash, type, ...(document ? { document } : {}) }))).blob(),
 
-  records: (type?: string, kind?: string) => request<HojaRecord[]>(`/api/records${query({ type, kind })}`),
-  record: (rid: string) => request<{ record: HojaRecord; revisions: Revision[] }>(`/api/records/${id(rid)}`),
-  createRecord: (type: string, kind: string, fields: Patch) => applied<HojaRecord>('/api/records', json('POST', { type, kind, fields })),
-  updateRecord: (rid: string, version: number, fields: Patch) => applied<HojaRecord>(`/api/records/${id(rid)}`, json('PUT', { version, fields })),
-  setReviewed: (rid: string, version: number, reviewed: boolean) => request<HojaRecord>(`/api/records/${id(rid)}/reviewed`, json('POST', { version, reviewed })),
-  deleteRecord: (rid: string, version: number) => request<unknown>(`/api/records/${id(rid)}/delete`, json('POST', { version })),
+  records: (type?: string, kind?: string) => request<HojaRecord[]>(`api/records${query({ type, kind })}`),
+  record: (rid: string) => request<{ record: HojaRecord; revisions: Revision[] }>(`api/records/${id(rid)}`),
+  createRecord: (type: string, kind: string, fields: Patch) => applied<HojaRecord>('api/records', json('POST', { type, kind, fields })),
+  updateRecord: (rid: string, version: number, fields: Patch) => applied<HojaRecord>(`api/records/${id(rid)}`, json('PUT', { version, fields })),
+  setReviewed: (rid: string, version: number, reviewed: boolean) => request<HojaRecord>(`api/records/${id(rid)}/reviewed`, json('POST', { version, reviewed })),
+  deleteRecord: (rid: string, version: number) => request<unknown>(`api/records/${id(rid)}/delete`, json('POST', { version })),
 
-  documents: (type?: string) => request<HojaDocument[]>(`/api/documents${query({ type })}`),
-  document: (did: string) => request<DocumentView>(`/api/documents/${id(did)}`),
-  createDocument: (type: string, title: string, fields: Patch) => applied<HojaDocument>('/api/documents', json('POST', { type, title, fields })),
-  updateDocument: (did: string, version: number, title: string, fields: Patch) => applied<HojaDocument>(`/api/documents/${id(did)}`, json('PUT', { version, title, fields })),
+  documents: (type?: string) => request<HojaDocument[]>(`api/documents${query({ type })}`),
+  document: (did: string) => request<DocumentView>(`api/documents/${id(did)}`),
+  createDocument: (type: string, title: string, fields: Patch) => applied<HojaDocument>('api/documents', json('POST', { type, title, fields })),
+  updateDocument: (did: string, version: number, title: string, fields: Patch) => applied<HojaDocument>(`api/documents/${id(did)}`, json('PUT', { version, title, fields })),
   select: (did: string, section: string, version: number, record_ids: string[]) =>
-    applied<HojaDocument>(`/api/documents/${id(did)}/sections/${id(section)}`, json('PUT', { version, record_ids })),
-  approve: (did: string, version: number, hash: string) => request<HojaDocument>(`/api/documents/${id(did)}/approve`, json('POST', { version, hash })),
-  preview: async (did: string) => (await send(`/api/documents/${id(did)}/preview.pdf`)).blob(),
-  exportDocument: (did: string, format: Format) => request<{ path: string; filename: string; approved: boolean }>(`/api/documents/${id(did)}/export`, json('POST', { format })),
+    applied<HojaDocument>(`api/documents/${id(did)}/sections/${id(section)}`, json('PUT', { version, record_ids })),
+  approve: (did: string, version: number, hash: string) => request<HojaDocument>(`api/documents/${id(did)}/approve`, json('POST', { version, hash })),
+  preview: async (did: string) => (await send(`api/documents/${id(did)}/preview.pdf`)).blob(),
+  exportDocument: (did: string, format: Format) => request<{ path: string; filename: string; approved: boolean }>(`api/documents/${id(did)}/export`, json('POST', { format })),
 
-  markdown: (text: string) => request<{ html: string }>('/api/markdown', json('POST', { text })),
+  markdown: (text: string) => request<{ html: string }>('api/markdown', json('POST', { text })),
 
-  approvals: (state?: string) => request<Approval[]>(`/api/approvals${query({ state })}`),
+  approvals: (state?: string) => request<Approval[]>(`api/approvals${query({ state })}`),
   decide: (aid: string, decision: 'accept' | 'reject' | 'request_changes', reason: string | null, payload?: Approval['payload']) =>
-    request<Approval>(`/api/approvals/${id(aid)}/decide`, json('POST', { decision, reason, ...(payload ? { payload } : {}) }))
+    request<Approval>(`api/approvals/${id(aid)}/decide`, json('POST', { decision, reason, ...(payload ? { payload } : {}) }))
 };
 
 export function message(error: unknown, fallback: string): string {

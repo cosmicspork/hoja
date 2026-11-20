@@ -32,6 +32,8 @@ use crate::store::{Resolved, Store, StoreError};
 /// cross-origin without a preflight hoja never answers.
 pub const AGENT_HEADER: &str = "x-hoja-agent";
 const MAX_WAIT: u64 = 45;
+/// The largest JSON body a handler reads.
+pub(crate) const BODY_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct App {
@@ -47,7 +49,7 @@ struct Assets;
 
 type ApiResult<T = Value> = Result<Json<T>, Response>;
 
-fn error(status: StatusCode, code: &str, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({"error": code, "message": message}))).into_response()
 }
 
@@ -768,7 +770,7 @@ async fn fallback(uri: Uri) -> Response {
     }
 }
 
-fn json_content(request: &Request) -> bool {
+pub(crate) fn json_content(request: &Request) -> bool {
     request
         .headers()
         .get(header::CONTENT_TYPE)
@@ -779,13 +781,18 @@ fn json_content(request: &Request) -> bool {
         })
 }
 
+/// The agent API's paths, which only an agent's CLI may reach.
+pub(crate) fn is_agent_path(path: &str) -> bool {
+    path == "/api/agent" || path.starts_with("/api/agent/")
+}
+
 /// Person routes accept mutations only from the page's own origin. Agent
 /// routes accept no browser at all: no Origin header, and the custom agent
 /// header a cross-origin page can't send without a preflight.
 async fn guard(State(app): State<App>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     let is_api = path.starts_with("/api");
-    let is_agent = path == "/api/agent" || path.starts_with("/api/agent/");
+    let is_agent = is_agent_path(path);
     let ipv4_host = app.origin.strip_prefix("http://").unwrap_or("");
     let port = ipv4_host.strip_prefix("127.0.0.1:").unwrap_or("");
     let host = request
@@ -845,19 +852,11 @@ async fn guard(State(app): State<App>, request: Request, next: Next) -> Response
     response
 }
 
-pub fn router(app: App) -> Router {
-    let agent = Router::new()
-        .route("/types", get(agent_types))
-        .route("/records", get(records).post(agent_create_record))
-        .route("/records/{id}", get(record).post(agent_update_record))
-        .route("/documents", get(documents).post(agent_create_document))
-        .route(
-            "/documents/{id}",
-            get(agent_document).post(agent_update_document),
-        )
-        .route("/documents/{id}/sections/{section}", post(agent_select))
-        .route("/documents/{id}/build", post(agent_build))
-        .route("/approvals/{id}", get(agent_wait));
+/// The person's API: the routes hoja's page uses. Every write here is the
+/// person's, so whatever serves it must first establish that the request is
+/// the person's (the page's own origin standalone, the node's signed context
+/// as a plugin).
+pub fn person_api() -> Router<App> {
     Router::new()
         .route("/api/state", get(state))
         .route("/api/types/{name}/change", get(type_change))
@@ -878,11 +877,49 @@ pub fn router(app: App) -> Router {
         .route("/api/markdown", post(markdown_preview))
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{id}/decide", post(decide))
-        .nest("/api/agent", agent)
+}
+
+/// The agent API, mounted at `/api/agent` by the routers that serve it.
+fn agent_api() -> Router<App> {
+    Router::new()
+        .route("/types", get(agent_types))
+        .route("/records", get(records).post(agent_create_record))
+        .route("/records/{id}", get(record).post(agent_update_record))
+        .route("/documents", get(documents).post(agent_create_document))
+        .route(
+            "/documents/{id}",
+            get(agent_document).post(agent_update_document),
+        )
+        .route("/documents/{id}/sections/{section}", post(agent_select))
+        .route("/documents/{id}/build", post(agent_build))
+        .route("/approvals/{id}", get(agent_wait))
+}
+
+/// A JSON 404 for any path a router does not serve.
+pub(crate) async fn not_found() -> Response {
+    error(StatusCode::NOT_FOUND, "not_found", "Not found.")
+}
+
+/// Standalone `hoja serve`: the page, the person's API and the agent API on
+/// one loopback port.
+pub fn router(app: App) -> Router {
+    person_api()
+        .nest("/api/agent", agent_api())
         .fallback(fallback)
         .route("/", get(asset))
         .route("/assets/{*path}", get(asset))
-        .layer(DefaultBodyLimit::max(64 * 1024))
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .layer(middleware::from_fn_with_state(app.clone(), guard))
+        .with_state(app)
+}
+
+/// Only the agent API, with the same checks as standalone, for plugin mode's
+/// `agent_listen`: the person's routes and the page are not on it.
+pub fn agent_router(app: App) -> Router {
+    Router::new()
+        .nest("/api/agent", agent_api())
+        .fallback(not_found)
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }

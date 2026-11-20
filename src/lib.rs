@@ -1,10 +1,12 @@
 pub mod client;
 pub mod config;
+pub mod contract;
 pub mod gates;
 pub mod http;
 pub mod lint;
 pub mod markdown;
 pub mod model;
+pub mod plugin;
 pub mod provenance;
 pub mod render;
 pub mod store;

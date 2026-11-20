@@ -1,14 +1,17 @@
 [package]
 name = "hoja"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 edition = "2024"
 
 [dependencies]
 anyhow = "1"
 axum = "0.8"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+ed25519-dalek = "3"
+hex = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 listenfd = "1"
 mime_guess = "2"
