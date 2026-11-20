@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/cosmicspork/hoja/compare/v0.2.0...v0.3.0) (2026-11-20)
+
+
+### Features
+
+* raise agent cards in Tracon's queue as word diffs ([#8](https://github.com/cosmicspork/hoja/issues/8)) ([823fadb](https://github.com/cosmicspork/hoja/commit/823fadbb2ba2e14dde1370a05b7482e9003e2938))
+
 ## [0.2.0](https://github.com/cosmicspork/hoja/compare/v0.1.0...v0.2.0) (2026-11-20)
 
 
