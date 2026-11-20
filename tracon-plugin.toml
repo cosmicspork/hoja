@@ -9,7 +9,7 @@
 # /home/linuxbrew/.linuxbrew/bin, /opt/homebrew/bin, /usr/local/bin or
 # /usr/bin. Markdown and HTML exports need nothing else.
 name = "hoja"
-version = "0.2.0"
+version = "0.1.0"
 contract = 1
 exec = ["bin/hoja", "serve"]
 

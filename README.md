@@ -185,6 +185,10 @@ bun test --cwd spa
 
 `bun run --cwd spa dev` serves the UI with hot reload and proxies `/api` to a `hoja serve` on port 4520. Plugin mode is in `src/plugin.rs` and the signed-context check in `src/contract.rs`; `tests/plugin.rs` runs the built binary as a node would. Gates live in `src/gates.rs` and are enforced in `src/store.rs`; type parsing and value normalization are in `src/config.rs`; lints in `src/lint.rs`; rendering in `src/render.rs`; the template gate in `src/templates.rs`; Markdown in `src/markdown.rs`; the provenance view in `src/provenance.rs`. The HTTP tests in `tests/http.rs` render real PDFs, including every example template from its samples and from placeholders, when `typst` is on `PATH`.
 
+## Releases
+
+Releases are cut with [release-please](https://github.com/googleapis/release-please). Each merge to `main` updates a release PR that bumps the version in `Cargo.toml`, `Cargo.lock`, `tracon-plugin.toml` and `spa/package.json` together and writes `CHANGELOG.md` from the conventional-commit PR titles (`feat` bumps the minor version, `fix` the patch, and before 1.0 a breaking change bumps the minor). Merging the release PR tags `v<version>`, creates the GitHub release, and the release workflow attaches `hoja-<version>-<target>.tar.gz` for each target (holding `tracon-plugin.toml`, `bin/hoja` and `ui/`) with `checksums.txt` and build provenance attestations.
+
 ## License
 
 [MIT](LICENSE)
