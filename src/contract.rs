@@ -1,5 +1,5 @@
-//! The caller context a Tracon node signs onto each request it forwards from
-//! hoja's page in the node's UI, and its check. Wire format v1, shared with
+//! The caller context a Tracon node signs onto each tool call and each
+//! request it forwards from hoja's page in the node's UI, and its check. Wire format v1, shared with
 //! Tracon's plugin host and the other plugins: an object holding `v`,
 //! `plugin`, `instance`, `tool`, `arguments_sha256`, `caller`, `channel`,
 //! `approval_id`, `issued_ms`, `expires_ms`, `nonce`, `credentials` and
@@ -7,8 +7,9 @@
 //! `tracon/v1/plugin-call`, a big-endian u32 length, and the canonical JSON of
 //! the object without `signature`.
 //!
-//! A UI request is the tool `tracon/ui`, and its "arguments" are the HTTP
-//! request itself: method, request target and a hash of the body.
+//! A tool call's context names the tool and hashes its arguments. A UI
+//! request is the tool `tracon/ui`, and its "arguments" are the HTTP request
+//! itself: method, request target and a hash of the body.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -17,6 +18,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{Value, json};
 
 use crate::config::{canonical_json, sha256_hex};
+use crate::gates::Actor;
 
 /// What the signature is over, ahead of the context.
 pub const LABEL: &str = "tracon/v1/plugin-call";
@@ -154,26 +156,65 @@ fn is_hex(s: &str, len: usize) -> bool {
     s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Check a UI request's context, in the order the contract fixes:
+/// Who a verified context says is calling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caller {
+    /// `operator`, `agent` or `plugin`.
+    pub kind: String,
+    pub session: Option<String>,
+    pub harness: Option<String>,
+    pub channel: String,
+}
+
+/// The author hoja records for an agent whose harness gives no usable name.
+pub const UNNAMED_AGENT: &str = "agent";
+
+impl Caller {
+    /// The agent hoja records as the author of a tool call: the harness the
+    /// node says made it (`claude`, or `external` for a harness the operator
+    /// runs), never a name the agent picked.
+    pub fn agent(&self) -> Actor {
+        let name = self
+            .harness
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| crate::http::valid_agent_name(h))
+            .unwrap_or(UNNAMED_AGENT);
+        Actor::Agent(name.to_string())
+    }
+}
+
+/// The `arguments_sha256` of a tool call: the hash of the canonical JSON of
+/// its arguments, `{}` when there are none.
+pub fn arguments_sha256(arguments: Option<&Value>) -> String {
+    let empty = json!({});
+    let arguments = match arguments {
+        None | Some(Value::Null) => &empty,
+        Some(v) => v,
+    };
+    sha256_hex(canonical(arguments).as_bytes())
+}
+
+/// Checks 1 to 6, in the order the contract fixes, for a context that must
+/// be about `tool` with arguments hashing to `args_hash`:
 ///
 /// 1. `v` is 1 and `plugin` is hoja (and the context is well formed)
 /// 2. `instance` is the hash of this process's plugin token
-/// 3. `tool` is `tracon/ui` and `arguments_sha256` matches the request
+/// 3. `tool` and `arguments_sha256` match what is being served
 /// 4. the signature verifies under the node key
 /// 5. now is within the window, give or take [`SKEW_MS`], and the window is
 ///    at most [`MAX_WINDOW_MS`]
 /// 6. the nonce has not been seen
-/// 7. the caller is the operator
 ///
-/// Returns the channel the operator opened the UI for. Nothing is done for a
-/// refused request.
-pub fn verify_ui(
+/// Check 7, who may call, is the caller's: [`verify_ui`] and [`verify_call`].
+pub fn verify(
     meta: &Value,
-    request: &UiRequest,
+    tool: &str,
+    args_hash: &str,
     env: &ContractEnv,
     now_ms: i64,
     nonces: &NonceCache,
-) -> Result<String, Refusal> {
+) -> Result<Caller, Refusal> {
     // 1
     let Some(ctx) = meta.as_object() else {
         return refuse(1, "the request carries no caller context");
@@ -188,7 +229,7 @@ pub fn verify_ui(
         return refuse(1, "caller context holds a non-integer number");
     }
     let str_of = |k: &str| ctx.get(k).and_then(Value::as_str);
-    let (Some(instance), Some(tool), Some(args_hash), Some(channel), Some(nonce), Some(sig)) = (
+    let (Some(instance), Some(ctx_tool), Some(ctx_args), Some(channel), Some(nonce), Some(sig)) = (
         str_of("instance"),
         str_of("tool"),
         str_of("arguments_sha256"),
@@ -204,14 +245,13 @@ pub fn verify_ui(
     ) else {
         return refuse(1, "caller context has no integer issued_ms and expires_ms");
     };
-    let Some(kind) = ctx
-        .get("caller")
-        .and_then(Value::as_object)
-        .and_then(|c| c.get("kind"))
-        .and_then(Value::as_str)
-    else {
+    let Some(caller) = ctx.get("caller").and_then(Value::as_object) else {
+        return refuse(1, "caller context has no caller");
+    };
+    let Some(kind) = caller.get("kind").and_then(Value::as_str) else {
         return refuse(1, "caller context has no caller kind");
     };
+    let optional = |k: &str| caller.get(k).and_then(Value::as_str).map(str::to_string);
 
     // 2
     if instance != env.instance {
@@ -219,13 +259,13 @@ pub fn verify_ui(
     }
 
     // 3
-    if tool != UI_TOOL {
+    if ctx_tool != tool {
         return refuse(
             3,
-            format!("caller context is for tool {tool}, not {UI_TOOL}"),
+            format!("caller context is for tool {ctx_tool}, not {tool}"),
         );
     }
-    if args_hash != ui_arguments_sha256(request) {
+    if ctx_args != args_hash {
         return refuse(3, "caller context is for another request");
     }
 
@@ -267,15 +307,74 @@ pub fn verify_ui(
         return refuse(6, "caller context nonce was already used");
     }
 
-    // 7: an agent never reaches the person's API, whatever it was lent.
-    if kind != "operator" {
+    Ok(Caller {
+        kind: kind.to_string(),
+        session: optional("session"),
+        harness: optional("harness"),
+        channel: channel.to_string(),
+    })
+}
+
+/// Check a UI request's context: checks 1 to 6 for `tracon/ui` and exactly
+/// this request, then 7: the caller is the operator. An agent never reaches
+/// the person's API, whatever it was lent. Nothing is done for a refused
+/// request.
+pub fn verify_ui(
+    meta: &Value,
+    request: &UiRequest,
+    env: &ContractEnv,
+    now_ms: i64,
+    nonces: &NonceCache,
+) -> Result<Caller, Refusal> {
+    let caller = verify(
+        meta,
+        UI_TOOL,
+        &ui_arguments_sha256(request),
+        env,
+        now_ms,
+        nonces,
+    )?;
+    if caller.kind != "operator" {
         return refuse(
             7,
-            format!("hoja's page is the operator's, not the {kind}'s"),
+            format!("hoja's page is the operator's, not the {}'s", caller.kind),
         );
     }
+    Ok(caller)
+}
 
-    Ok(channel.to_string())
+/// Check a tool call's context: checks 1 to 6 for `tool` and exactly these
+/// arguments, then 7: the caller is an agent. hoja's tools are the agent
+/// API, and their author is the agent the node names; the person works in
+/// hoja's page. No approval is required: hoja's own gates decide what an
+/// agent's write does (applied where the type allows it, a card for the
+/// person otherwise). Nothing is done for a refused call.
+pub fn verify_call(
+    meta: &Value,
+    tool: &str,
+    arguments: Option<&Value>,
+    env: &ContractEnv,
+    now_ms: i64,
+    nonces: &NonceCache,
+) -> Result<Caller, Refusal> {
+    let caller = verify(
+        meta,
+        tool,
+        &arguments_sha256(arguments),
+        env,
+        now_ms,
+        nonces,
+    )?;
+    if caller.kind != "agent" {
+        return refuse(
+            7,
+            format!(
+                "hoja's tools are an agent's, not the {}'s; the person uses hoja's page",
+                caller.kind
+            ),
+        );
+    }
+    Ok(caller)
 }
 
 #[cfg(test)]
@@ -349,8 +448,8 @@ mod tests {
     fn a_good_context_gives_the_channel() {
         let req = request("/api/records?type=raid", b"{\"x\":1}");
         let ctx = context(&req, 1_000_000, NONCE, "operator");
-        let channel = verify_ui(&ctx, &req, &env(), 1_000_000, &NonceCache::default()).unwrap();
-        assert_eq!(channel, "personal");
+        let caller = verify_ui(&ctx, &req, &env(), 1_000_000, &NonceCache::default()).unwrap();
+        assert_eq!(caller.channel, "personal");
     }
 
     #[test]
@@ -396,6 +495,57 @@ mod tests {
 
         let ctx = context(&req, 0, NONCE, "agent");
         assert_eq!(check(&ctx, &req, 0), 7);
+    }
+
+    fn call_context(tool: &str, args: Option<&Value>, kind: &str, harness: Value) -> Value {
+        sign(
+            &json!({
+                "v": 1, "plugin": PLUGIN, "instance": instance_of("token"), "tool": tool,
+                "arguments_sha256": arguments_sha256(args),
+                "caller": { "kind": kind, "session": null, "harness": harness },
+                "channel": "personal", "approval_id": null,
+                "issued_ms": 0, "expires_ms": 30_000, "nonce": NONCE,
+                "credentials": {},
+            }),
+            &key(),
+        )
+    }
+
+    #[test]
+    fn a_tool_call_is_an_agent_named_by_its_harness() {
+        let args = json!({"id": "r1", "version": 2, "fields": {}});
+        let call = |ctx: &Value, tool: &str, args: Option<&Value>| {
+            verify_call(ctx, tool, args, &env(), 0, &NonceCache::default())
+        };
+        let ctx = call_context("record_edit", Some(&args), "agent", json!("claude"));
+        let caller = call(&ctx, "record_edit", Some(&args)).unwrap();
+        assert_eq!(caller.agent(), Actor::Agent("claude".into()));
+
+        // Signed for other arguments, or another tool.
+        let other = json!({"id": "r2", "version": 2, "fields": {}});
+        assert_eq!(
+            call(&ctx, "record_edit", Some(&other)).unwrap_err().check,
+            3
+        );
+        assert_eq!(
+            call(&ctx, "record_create", Some(&args)).unwrap_err().check,
+            3
+        );
+
+        // No arguments hash as {}.
+        let ctx = call_context("types", None, "agent", json!("external"));
+        assert!(call(&ctx, "types", Some(&json!({}))).is_ok());
+
+        // The person works in the page; another plugin is not an agent.
+        for kind in ["operator", "plugin"] {
+            let ctx = call_context("types", None, kind, Value::Null);
+            assert_eq!(call(&ctx, "types", None).unwrap_err().check, 7);
+        }
+
+        // A harness name hoja can't record becomes the placeholder.
+        let ctx = call_context("types", None, "agent", json!("two words"));
+        let caller = call(&ctx, "types", None).unwrap();
+        assert_eq!(caller.agent(), Actor::Agent(UNNAMED_AGENT.into()));
     }
 
     #[test]

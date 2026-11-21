@@ -43,11 +43,11 @@ An agent request that needs the person returns immediately:
 
 ### Cards in Tracon's queue
 
-When hoja runs as a Tracon plugin, a card can be raised in the operator's Tracon queue instead of hoja's own (`src/node_cards.rs`). The node gives the plugin a socket for calling it back; hoja asks it for a card (`approval/request`) showing the agent's change as a word diff per field, with the agent's note, and reads the decision (`approval/status`). The card is still hoja's: it is linked to the Tracon approval, and once the operator decides there, hoja decides it here as the person. An approval accepts it, so the revision is `agent_accepted` under the agent's name. A rejection, a request for changes or an expiry rejects it or sends it back with the operator's words. A card whose target moved since the agent read it is rejected as stale, never applied. Raised for an agent's call through Tracon, the card carries that call's signed caller context, so the node files it with the agent's session, and the agent's name is taken from the same context rather than from the agent. hoja's own queue is unchanged for standalone use.
+When hoja runs as a Tracon plugin, a card can be raised in the operator's Tracon queue instead of hoja's own (`src/node_cards.rs`). The node gives the plugin a socket for calling it back; hoja asks it for a card (`approval/request`) showing the agent's change as a word diff per field, with the agent's note, and reads the decision (`approval/status`). The card is still hoja's: it is linked to the Tracon approval, and once the operator decides there, hoja decides it here as the person. An approval accepts it, so the revision is `agent_accepted` under the agent's name. A rejection, a request for changes or an expiry rejects it or sends it back with the operator's words. A card whose target moved since the agent read it is rejected as stale, never applied. Raised for an agent's call through Tracon, the card carries that call's signed caller context, so the node files it with the agent's session, and the agent's name is taken from the same context rather than from the agent. hoja's own queue is unchanged for standalone use. This relay is not wired up yet: a card opened by a tool call or the CLI waits in hoja's own queue, in its page.
 
 ### What this is not
 
-hoja is a protocol between you and an agent that uses its CLI. It is not a sandbox. The server listens only on loopback; person routes require the page's own Origin; the agent API rejects any request with a browser Origin and requires an `X-Hoja-Agent` header, so web pages can't reach either. An agent running on your machine as you can still read the database file or forge headers with `curl`. Run agents you don't trust in an environment that can't reach the workspace, as Tracon's managed sessions do.
+hoja is a protocol between you and an agent that uses its CLI or tools. It is not a sandbox. The server listens only on loopback; person routes require the page's own Origin; the agent API rejects any request with a browser Origin and requires an `X-Hoja-Agent` header, so web pages can't reach either. An agent running on your machine as you can still read the database file or forge headers with `curl`. Run agents you don't trust in an environment that can't reach the workspace, as Tracon's managed sessions do.
 
 ## Install and run
 
@@ -80,7 +80,9 @@ hoja also runs as a [Tracon](https://github.com/cosmicspork/tracon) plugin with 
 tracon plugin add cosmicspork/hoja
 ```
 
-The node starts `hoja serve --socket <path> --data <dir>` for each channel, serves hoja's page itself, and shows it in Tracon's **Plugins** section. The page's requests reach hoja through the node, each with a context the node signs for the operator; hoja serves its person API only to requests carrying a valid one, in place of the Origin check above. hoja offers no MCP tools and takes no credentials.
+The node starts `hoja serve --socket <path> --data <dir>` for each channel, serves hoja's page itself, and shows it in Tracon's **Plugins** section. The page's requests reach hoja through the node, each with a context the node signs for the operator; hoja serves its person API only to requests carrying a valid one, in place of the Origin check above. hoja takes no credentials and reaches no network.
+
+Agents on the channel get hoja's tools, `hoja__types`, `hoja__record_edit` and the rest (see [For agents: the tools](#for-agents-the-tools)). Each call carries a context the node signs, and hoja checks it before running anything: it must be for this start of hoja, this tool and exactly these arguments, fresh and not replayed, and from an agent. The author hoja records is the harness the node names in it (`claude`, or `external` for a harness you run yourself), not a name the agent picked. The tools need no Tracon approval of their own, since hoja's gates already decide what an agent's write does: it lands where the type lets agents write directly, and otherwise becomes a card you decide in hoja's page. If the node does ask you about a call, the card's preview says so; allowing it lets the call reach hoja, and does not accept the change.
 
 The node starts it with an empty environment, so it is configured by an optional `<data>/plugin.toml`:
 
@@ -98,7 +100,7 @@ agent_listen = "127.0.0.1:4520"
 
 Pointing `workspace` at an existing workspace, such as `~/hoja`, keeps its data in place. Stop the standalone server first (`systemctl --user stop hoja.socket hoja.service`), since `agent_listen` on 4520 would collide with it and two servers shouldn't share one database.
 
-Agents can't use the plugin socket: every request on it is the operator's, so it refuses `/api/agent/*`. With `agent_listen` set, the CLI keeps working against that port (`HOJA_URL` if it isn't 4520) with the same agent checks as standalone; it serves nothing else. Without it, agents have no way in. Inside Tracon the page is framed and may not display PDF previews; each preview has a download link.
+The socket's HTTP API is the operator's alone, so it refuses `/api/agent/*`; agents use the tools. With `agent_listen` set, the CLI and `hoja mcp` also work against that port (`HOJA_URL` if it isn't 4520) with the same agent checks as standalone; it serves nothing else. Inside Tracon the page is framed and may not display PDF previews; each preview has a download link.
 
 ## Workspaces
 
@@ -175,6 +177,38 @@ hoja wait <approval_id>
 ```
 
 `--version` is the version you read. Writes return `{"state": "applied", "result": …}` or a card. A refusal (`"error": "refused"`) is a decision: don't route around it.
+
+## For agents: the tools
+
+The same operations are MCP tools, one per agent API route, with the same names, inputs and answers. One table in `src/ops.rs` defines them: the HTTP routes are built from it, both MCP modes list it, and `tests/parity.rs` fails if a route has no tool, a tool has no route, or a person route is neither the person's copy of a tool nor listed with the reason it isn't one.
+
+| Tool | Route under `/api/agent` | CLI |
+|---|---|---|
+| `types` | `GET /types` | `hoja types` |
+| `records` | `GET /records?type=&kind=` | `hoja records` |
+| `record_show` | `GET /records/{id}` | `hoja record show` |
+| `record_create` | `POST /records` | `hoja record create` |
+| `record_edit` | `POST /records/{id}` | `hoja record edit` |
+| `documents` | `GET /documents?type=` | `hoja docs` |
+| `document_show` | `GET /documents/{id}` | `hoja doc show` |
+| `document_create` | `POST /documents` | `hoja doc create` |
+| `document_edit` | `POST /documents/{id}` | `hoja doc edit` |
+| `document_select` | `POST /documents/{id}/sections/{section}` | `hoja doc select` |
+| `document_build` | `POST /documents/{id}/build` | `hoja build` |
+| `card_status` | `GET /approvals/{approval_id}?wait=` | `hoja wait` |
+
+A tool's arguments are the route's path parameters (`id`, `section`, `approval_id`) and its query or JSON body, in one object. Its result is the API's JSON body, flagged as an error when the API would answer with one (`conflict`, `stale`, `refused`, `invalid_request`, `not_found`). `note` is Markdown, shown to you on any card the call opens.
+
+What only you decide has no route and no tool: marking records reviewed, approving documents, deciding cards, accepting type and template files, and deleting records.
+
+Two ways to reach them:
+
+- **Through Tracon**, as `hoja__<tool>`, when hoja runs as a plugin (above).
+- **`hoja mcp`**, a stdio MCP server for any MCP client. Each tool is sent to the running server as the agent `--agent` (or `HOJA_AGENT`) names, exactly as the CLI sends it, so the server's gates and your page apply:
+
+  ```sh
+  claude mcp add hoja -e HOJA_AGENT=claude -- hoja mcp
+  ```
 
 ## Development
 
