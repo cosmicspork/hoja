@@ -1169,6 +1169,16 @@ impl Store {
         Ok(())
     }
 
+    /// Forget that card `card_id` was raised in Tracon: it waits in hoja's
+    /// own queue only.
+    pub fn unlink_node_card(&self, card_id: &str) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        connection
+            .execute("DELETE FROM node_cards WHERE card_id=?1", params![card_id])
+            .map_err(internal)?;
+        Ok(())
+    }
+
     /// The Tracon approval card `card_id` was raised as, if it was.
     pub fn node_card(&self, card_id: &str) -> Result<Option<String>, StoreError> {
         let connection = self.lock()?;

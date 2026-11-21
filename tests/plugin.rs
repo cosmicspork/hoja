@@ -162,10 +162,20 @@ async fn tcp(
 
 impl Plugin {
     async fn start(setup: impl FnOnce(&Path)) -> Self {
+        Self::start_with(setup, None).await
+    }
+
+    /// Started as a node whose manifest names `node_methods` starts it:
+    /// with `--node-socket`.
+    async fn start_with(setup: impl FnOnce(&Path), node_socket: Option<&Path>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("data")).unwrap();
         setup(&dir.path().join("data"));
-        let child = command(dir.path()).spawn().unwrap();
+        let mut command = command(dir.path());
+        if let Some(path) = node_socket {
+            command.arg("--node-socket").arg(path);
+        }
+        let child = command.spawn().unwrap();
         let plugin = Self {
             child,
             socket: dir.path().join("hoja.sock"),
@@ -788,4 +798,251 @@ async fn previews_say_why_they_show_nothing_and_change_nothing() {
 
     let (_, answer) = plugin.mcp(&preview(Value::Null)).await;
     assert_eq!(answer["error"]["code"], -32001, "{answer}");
+}
+
+/// The socket the node serves a plugin for calls back to it, as far as hoja
+/// uses it: the cards it was asked to raise, and the decisions the test
+/// makes there. `offers` false answers as a node whose manifest for hoja
+/// names no `node_methods` would: no such method.
+#[derive(Clone)]
+struct Node {
+    offers: bool,
+    asked: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    decided: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Value>>>,
+    _dir: std::sync::Arc<tempfile::TempDir>,
+    path: PathBuf,
+}
+
+impl Node {
+    async fn start(offers: bool) -> Self {
+        use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.sock");
+        let node = Self {
+            offers,
+            asked: Default::default(),
+            decided: Default::default(),
+            _dir: std::sync::Arc::new(dir),
+            path: path.clone(),
+        };
+        async fn rpc(
+            State(node): State<Node>,
+            headers: HeaderMap,
+            Json(request): Json<Value>,
+        ) -> (axum::http::StatusCode, Json<Value>) {
+            let id = request["id"].clone();
+            let error = |code: i64, message: &str| json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}});
+            let bearer = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            if bearer != format!("Bearer {TOKEN}") {
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(error(-32001, "not this instance")),
+                );
+            }
+            let method = request["method"].as_str().unwrap_or_default();
+            let params = &request["params"];
+            if method == "approval/request" {
+                node.asked.lock().unwrap().push(params.clone());
+            }
+            if !node.offers {
+                let message = format!("{method} is not in hoja's node_methods");
+                return (axum::http::StatusCode::OK, Json(error(-32601, &message)));
+            }
+            let result = match method {
+                "approval/request" => {
+                    let n = node.asked.lock().unwrap().len();
+                    json!({"approval_id": format!("tracon-{n}"), "state": "pending", "new": true})
+                }
+                "approval/status" => {
+                    let approval = params["approval_id"].as_str().unwrap_or_default();
+                    node.decided
+                        .lock()
+                        .unwrap()
+                        .get(approval)
+                        .cloned()
+                        .unwrap_or_else(
+                            || json!({"approval_id": approval, "state": "still_waiting"}),
+                        )
+                }
+                _ => {
+                    return (
+                        axum::http::StatusCode::OK,
+                        Json(error(-32601, "no such method")),
+                    );
+                }
+            };
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({"jsonrpc": "2.0", "id": id, "result": result})),
+            )
+        }
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let app = Router::new().route("/", post(rpc)).with_state(node.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        node
+    }
+
+    fn asked(&self) -> Vec<Value> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    fn decide(&self, approval: &str, decision: Value) {
+        let mut view = decision;
+        view["approval_id"] = json!(approval);
+        self.decided
+            .lock()
+            .unwrap()
+            .insert(approval.to_string(), view);
+    }
+}
+
+impl Plugin {
+    /// A risk the person logged in the RAID log.
+    async fn person_risk(&self, title: &str) -> Value {
+        let body = json!({"type": "raid", "kind": "risk", "fields": {"title": title}}).to_string();
+        let (status, created) = self.person("POST", "/api/records", &body).await;
+        assert_eq!(status, 200, "{created}");
+        assert_eq!(created["state"], "applied", "{created}");
+        created["result"].clone()
+    }
+
+    /// `card_status`, waiting up to `wait` seconds.
+    async fn card_status(&self, card: &str, wait: u64) -> Value {
+        let (error, status) = self
+            .tool("card_status", json!({"approval_id": card, "wait": wait}))
+            .await;
+        assert!(!error, "{status}");
+        status
+    }
+}
+
+#[tokio::test]
+async fn a_tool_card_is_raised_in_tracon_and_applied_when_approved_there() {
+    let node = Node::start(true).await;
+    let plugin = Plugin::start_with(copy_example, Some(&node.path)).await;
+    plugin.accept("raid").await;
+    let risk = plugin.person_risk("Vendor slips").await;
+    let id = risk["id"].as_str().unwrap().to_string();
+
+    // A RAID risk gates every agent write, so the agent's edit is a card,
+    // and the agent's answer is what it always was.
+    let args = json!({"id": id, "version": risk["version"], "note": "From the vendor call",
+                      "fields": {"description": "The vendor may slip a month."}});
+    let meta = tool_context("record_edit", &args, "agent", json!("claude"));
+    let answer = plugin.call_with("record_edit", &args, meta.clone()).await;
+    let text = answer["result"]["content"][0]["text"].as_str().unwrap();
+    let edit: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(edit["state"], "awaiting_person", "{edit}");
+    let card = edit["approval_id"].as_str().unwrap().to_string();
+
+    // Raised in Tracon by the time the agent hears back: a word diff per
+    // field, the agent's note, on behalf of the very call it came from.
+    let asked = node.asked();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let asked = &asked[0];
+    assert_eq!(asked["title"], "Edit a raid record");
+    assert_eq!(asked["request_key"], format!("hoja-card-{card}"));
+    assert_eq!(asked["on_behalf"], meta);
+    let summary = asked["summary"].as_str().unwrap();
+    assert!(summary.contains("**claude** asks to edit"), "{summary}");
+    assert!(summary.contains("> From the vendor call"), "{summary}");
+    assert_eq!(
+        asked["content"],
+        json!([{"format": "word_diff", "title": "Description",
+                "before": "", "after": "The vendor may slip a month."}])
+    );
+
+    // The same request again is the same card, raised once.
+    let (error, again) = plugin.tool("record_edit", args.clone()).await;
+    assert!(!error, "{again}");
+    assert_eq!(again["approval_id"], card);
+    assert_eq!(node.asked().len(), 1);
+
+    assert_eq!(plugin.card_status(&card, 0).await["state"], "still_waiting");
+
+    // Approved in Tracon: applied here, under the agent's name.
+    node.decide("tracon-1", json!({"state": "approved", "notes": "fine"}));
+    let status = plugin.card_status(&card, 20).await;
+    assert_eq!(status["state"], "accepted", "{status}");
+    let (error, shown) = plugin.tool("record_show", json!({"id": id})).await;
+    assert!(!error, "{shown}");
+    assert_eq!(
+        shown["record"]["fields"]["description"],
+        "The vendor may slip a month."
+    );
+    let last = shown["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .max_by_key(|r| r["version"].as_i64())
+        .unwrap()
+        .clone();
+    assert_eq!(last["author"], "agent_accepted", "{last}");
+    assert_eq!(last["agent"], "claude", "{last}");
+}
+
+#[tokio::test]
+async fn a_tool_card_rejected_in_tracon_is_closed_with_the_reason() {
+    let node = Node::start(true).await;
+    let plugin = Plugin::start_with(copy_example, Some(&node.path)).await;
+    plugin.accept("raid").await;
+
+    let (error, risk) = plugin
+        .tool(
+            "record_create",
+            json!({"type": "raid", "kind": "risk",
+                   "fields": {"title": "Vendor slips", "description": "The vendor may slip."}}),
+        )
+        .await;
+    assert!(!error, "{risk}");
+    assert_eq!(risk["state"], "awaiting_person");
+    let card = risk["approval_id"].as_str().unwrap().to_string();
+    let asked = node.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0]["title"], "Create a risk in raid");
+    assert_eq!(asked[0]["content"][0]["format"], "table");
+
+    node.decide(
+        "tracon-1",
+        json!({"state": "rejected", "reason": "Not a risk yet"}),
+    );
+    let status = plugin.card_status(&card, 20).await;
+    assert_eq!(status["state"], "rejected", "{status}");
+    assert_eq!(status["reason"], "Not a risk yet");
+    assert!(plugin.records().await.is_empty());
+}
+
+#[tokio::test]
+async fn without_the_node_method_a_tool_card_waits_in_hojas_queue() {
+    // A node whose manifest for hoja names no node_methods answers none.
+    let node = Node::start(false).await;
+    let plugin = Plugin::start_with(copy_example, Some(&node.path)).await;
+    plugin.accept("raid").await;
+    let create = json!({"type": "raid", "kind": "risk", "fields": {"title": "Vendor slips"}});
+    let (error, risk) = plugin.tool("record_create", create).await;
+    assert!(!error, "{risk}");
+    assert_eq!(risk["state"], "awaiting_person");
+    let card = risk["approval_id"].as_str().unwrap().to_string();
+    assert_eq!(node.asked().len(), 1, "it asked, and was told no");
+    assert_eq!(plugin.card_status(&card, 0).await["state"], "still_waiting");
+
+    // The person decides it in hoja's page, as without a node socket.
+    let body = json!({"decision": "accept"}).to_string();
+    let path = format!("/api/approvals/{card}/decide");
+    let (status, decided) = plugin.person("POST", &path, &body).await;
+    assert_eq!(status, 200, "{decided}");
+    assert_eq!(plugin.card_status(&card, 0).await["state"], "accepted");
+    assert_eq!(plugin.records().await.len(), 1);
+
+    // A node socket nothing listens on is the same: the call still answers.
+    let gone = node.path.with_file_name("gone.sock");
+    let plugin = Plugin::start_with(copy_example, Some(&gone)).await;
+    plugin.accept("raid").await;
+    let create = json!({"type": "raid", "kind": "risk", "fields": {"title": "Another"}});
+    let (error, risk) = plugin.tool("record_create", create).await;
+    assert!(!error, "{risk}");
+    assert_eq!(risk["state"], "awaiting_person");
 }

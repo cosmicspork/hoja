@@ -5,8 +5,14 @@
 # The tools are the agent API's operations (src/ops.rs), one for one, and hoja
 # records the harness the node names as their author. hoja's own gates decide
 # what an agent's write does: it lands where the document type lets agents
-# write directly, and otherwise becomes a card the person decides in hoja's
-# page. So none is consequential. The person's own actions (approving,
+# write directly, and otherwise becomes a card for the person. So none is
+# consequential.
+#
+# node_methods: hoja raises the cards its tools open in the operator's
+# Tracon queue (approval/request, on behalf of the agent's call) and reads
+# the decision back (approval/status), deciding the card in hoja as the
+# person (src/node_cards.rs). Without the node socket, cards wait in hoja's
+# page. The person's own actions (approving,
 # deciding cards, marking reviewed, accepting type and template files,
 # deleting records) are not tools. Agents may also use the hoja CLI against
 # the loopback port `agent_listen` names in <data>/plugin.toml.
@@ -19,6 +25,7 @@ name = "hoja"
 version = "0.3.0"
 contract = 1
 exec = ["bin/hoja", "serve"]
+node_methods = ["approval/request", "approval/status"]
 
 [[tool]]
 name = "types"

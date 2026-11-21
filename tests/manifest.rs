@@ -9,7 +9,18 @@ fn the_manifest_matches_the_crate_and_the_contract() {
     keys.sort();
     // A key written after `[ui]` or a `[[tool]]` would land inside it, and
     // the node refuses unknown keys, so the set is exact.
-    assert_eq!(keys, ["contract", "exec", "name", "tool", "ui", "version"]);
+    assert_eq!(
+        keys,
+        [
+            "contract",
+            "exec",
+            "name",
+            "node_methods",
+            "tool",
+            "ui",
+            "version"
+        ]
+    );
     assert_eq!(manifest["name"].as_str(), Some(hoja::contract::PLUGIN));
     assert_eq!(
         manifest["version"].as_str(),
@@ -20,6 +31,15 @@ fn the_manifest_matches_the_crate_and_the_contract() {
         manifest["exec"],
         toml::Value::Array(vec!["bin/hoja".into(), "serve".into()])
     );
+    // The methods hoja calls the node back with, and no others: the node
+    // answers only these, and an update's card shows any change to them.
+    let methods: Vec<&str> = manifest["node_methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m.as_str().unwrap())
+        .collect();
+    assert_eq!(methods, hoja::node_cards::NODE_METHODS);
     let ui = manifest["ui"].as_table().unwrap();
     let mut ui_keys: Vec<&str> = ui.keys().map(String::as_str).collect();
     ui_keys.sort();

@@ -65,6 +65,11 @@ async fn rpc(
         }
         Some("approval/status") => {
             let id = params["approval_id"].as_str().unwrap_or_default();
+            // A card the node has no record of (its state was reset).
+            if id.starts_with("forgotten-") {
+                let error = json!({ "jsonrpc": "2.0", "id": request["id"], "error": { "code": -32602, "message": format!("no card {id} raised by plugin hoja on personal") } });
+                return (StatusCode::OK, Json(error));
+            }
             node.decided
                 .lock()
                 .unwrap()
@@ -325,4 +330,34 @@ async fn the_node_refuses_another_token() {
         node_cards::agent_of(&json!({ "caller": { "kind": "operator" } })),
         None
     );
+}
+
+#[tokio::test]
+async fn a_card_the_node_does_not_know_goes_back_to_hojas_queue() {
+    let f = fixture().await;
+    let (_, lost) = agent_edit(&f, "claude", "Lost there");
+    f.store.link_node_card(&lost, "forgotten-1").unwrap();
+    let (record_id, card) = agent_edit(&f, "claude", "Shipped the new sync engine");
+    let approval = node_cards::raise(&f.store, &f.socket, &card, None)
+        .await
+        .unwrap();
+    f.node
+        .decided
+        .lock()
+        .unwrap()
+        .insert(approval, json!({ "state": "approved" }));
+
+    // The card the node can't answer for doesn't hold up the others.
+    let settled = node_cards::settle(&f.store, &f.socket).await.unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0].card_id, card);
+    assert_eq!(
+        f.store.record(&record_id).unwrap().fields["text"],
+        "Shipped the new sync engine"
+    );
+    // Unlinked, it waits for the person in hoja's page, and is not asked
+    // about again.
+    assert_eq!(f.store.node_card(&lost).unwrap(), None);
+    assert_eq!(f.store.approval(&lost).unwrap().state, "pending");
+    assert!(f.store.node_cards_waiting().unwrap().is_empty());
 }
