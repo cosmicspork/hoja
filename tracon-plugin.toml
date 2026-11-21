@@ -1,8 +1,15 @@
 # hoja as a Tracon plugin (contract 1). The node serves the page from ui/ and
 # forwards its api/ requests to `hoja serve --socket <path> --data <dir>`,
-# signed as the operator's. hoja offers no MCP tools, takes no credentials and
-# reaches no network: agents use the hoja CLI against the loopback port
-# `agent_listen` names in <data>/plugin.toml.
+# signed as the operator's. hoja takes no credentials and reaches no network.
+#
+# The tools are the agent API's operations (src/ops.rs), one for one, and hoja
+# records the harness the node names as their author. hoja's own gates decide
+# what an agent's write does: it lands where the document type lets agents
+# write directly, and otherwise becomes a card the person decides in hoja's
+# page. So none is consequential. The person's own actions (approving,
+# deciding cards, marking reviewed, accepting type and template files,
+# deleting records) are not tools. Agents may also use the hoja CLI against
+# the loopback port `agent_listen` names in <data>/plugin.toml.
 #
 # PDFs are rendered by the host's Typst compiler, a program hoja runs. Name it
 # as `typst` in <data>/plugin.toml, or install it at one of
@@ -12,6 +19,54 @@ name = "hoja"
 version = "0.3.0"
 contract = 1
 exec = ["bin/hoja", "serve"]
+
+[[tool]]
+name = "types"
+hint = "read"
+
+[[tool]]
+name = "records"
+hint = "read"
+
+[[tool]]
+name = "record_show"
+hint = "read"
+
+[[tool]]
+name = "record_create"
+hint = "write"
+
+[[tool]]
+name = "record_edit"
+hint = "write"
+
+[[tool]]
+name = "documents"
+hint = "read"
+
+[[tool]]
+name = "document_show"
+hint = "read"
+
+[[tool]]
+name = "document_create"
+hint = "write"
+
+[[tool]]
+name = "document_edit"
+hint = "write"
+
+[[tool]]
+name = "document_select"
+hint = "write"
+
+[[tool]]
+name = "document_build"
+hint = "write"
+
+[[tool]]
+name = "card_status"
+hint = "read"
 
 [ui]
 entry = "ui/index.html"

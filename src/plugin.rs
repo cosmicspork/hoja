@@ -5,11 +5,22 @@
 //! makes a request the person's; it replaces the standalone server's Origin
 //! and Host checks.
 //!
-//! The socket carries MCP at `POST /` (hoja offers no tools) and the person's
-//! API at `/api/*`. It never carries the agent API: every request on it is
-//! attested as the operator, so an agent route there would turn an agent's
-//! write into the person's. Agents keep using the CLI against a separate
-//! loopback port, `agent_listen`, when `plugin.toml` names one.
+//! The socket carries two things:
+//!
+//! - `POST /` is MCP. hoja offers the agent API's operations as tools
+//!   (`ops::OPS`), each call checked against the context the node signed
+//!   into `params._meta.tracon`. The author hoja records is the harness the
+//!   node names there, not a name the agent picked. The person's own
+//!   actions (approving, deciding cards, marking reviewed, accepting type
+//!   and template files, deleting) are not tools. A tool needs no approval
+//!   of the node's: hoja's gates decide what an agent's write does, applied
+//!   where the type allows it and a card for the person otherwise.
+//! - `/api/*` is the person's API. It never carries the agent API: every
+//!   request on it is attested as the operator, so an agent route there
+//!   would turn an agent's write into the person's.
+//!
+//! Agents that use the hoja CLI rather than the tools keep working against a
+//! separate loopback port, `agent_listen`, when `plugin.toml` names one.
 //!
 //! The node starts hoja with an empty environment (no `HOME`, no `PATH`), so
 //! everything else comes from `<data>/plugin.toml`.
@@ -38,6 +49,8 @@ use tokio::sync::watch;
 use crate::config::Workspace;
 use crate::contract::{self, ContractEnv, NonceCache, UiRequest};
 use crate::http::{self, App};
+use crate::mcp::{self, Host, RpcError};
+use crate::ops;
 use crate::render::Typst;
 use crate::store::Store;
 
@@ -47,8 +60,8 @@ pub const CONTRACT: &str = "1";
 pub const CONTEXT_HEADER: &str = "tracon-context";
 /// The most the node forwards; the handlers themselves take far less.
 const MAX_FORWARDED_BODY: usize = 1024 * 1024;
-/// The MCP revision hoja answers with when a client names none.
-const PROTOCOL_VERSION: &str = "2025-06-18";
+/// JSON-RPC error code for a call its caller context refuses.
+pub const REFUSED: i64 = -32001;
 /// Where Typst is looked for when `plugin.toml` names none: there is no
 /// `PATH` to search.
 pub const TYPST_CANDIDATES: [&str; 4] = [
@@ -68,7 +81,7 @@ pub struct PluginConfig {
     /// The Typst compiler. Default: the first of [`TYPST_CANDIDATES`] found.
     pub typst: Option<PathBuf>,
     /// A loopback address to serve the agent API on, for the hoja CLI.
-    /// Default: none, so agents can't reach this instance.
+    /// Default: none, so agents reach this instance only through its tools.
     pub agent_listen: Option<SocketAddr>,
 }
 
@@ -154,7 +167,8 @@ fn context_of(request: &axum::http::request::Parts) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// The socket's gate. `POST /` is MCP. `/api/agent/*` is refused outright.
+/// The socket's gate. `POST /` is MCP, whose tool calls carry their own
+/// context. `/api/agent/*` is refused outright.
 /// Any other `/api` request runs only with a valid context for exactly that
 /// request; nothing else is served.
 async fn guard(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> Response {
@@ -167,7 +181,7 @@ async fn guard(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> R
             StatusCode::FORBIDDEN,
             "forbidden",
             "The agent API is not served on the plugin socket, where every request is the \
-             operator's. Agents use the hoja CLI against `agent_listen`.",
+             operator's. Agents use hoja's tools, or the hoja CLI against `agent_listen`.",
         );
     }
     if path != "/api" && !path.starts_with("/api/") {
@@ -226,50 +240,113 @@ async fn guard(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> R
     response
 }
 
-fn rpc_error(id: Value, code: i64, message: &str) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+/// The tools on the plugin socket: every call checked against its signed
+/// context and run as the agent the node names.
+#[derive(Clone)]
+pub struct Plugin {
+    pub app: App,
+    pub auth: Arc<Auth>,
 }
 
-/// Answer one JSON-RPC message; `None` for a notification or a response.
-pub fn mcp_answer(msg: &Value) -> Option<Value> {
-    let Some(method) = msg.get("method").and_then(Value::as_str) else {
-        if msg.get("result").is_some() || msg.get("error").is_some() {
-            return None;
-        }
-        let id = msg.get("id").cloned().unwrap_or(Value::Null);
-        return Some(rpc_error(id, -32600, "invalid request"));
-    };
-    let id = msg.get("id").cloned()?;
-    let result = match method {
-        "initialize" => {
-            let asked = msg["params"]["protocolVersion"]
-                .as_str()
-                .unwrap_or(PROTOCOL_VERSION);
-            json!({
-                "protocolVersion": asked,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": contract::PLUGIN, "version": env!("CARGO_PKG_VERSION")},
-            })
-        }
-        "ping" => json!({}),
-        "tools/list" => json!({"tools": []}),
-        "tools/call" => return Some(rpc_error(id, -32602, "hoja has no tools")),
-        other => return Some(rpc_error(id, -32601, &format!("no method {other}"))),
-    };
-    Some(json!({"jsonrpc": "2.0", "id": id, "result": result}))
+impl Plugin {
+    fn check(
+        &self,
+        tool: &str,
+        arguments: Option<&Value>,
+        meta: Option<&Value>,
+        preview: bool,
+    ) -> Result<contract::Caller, RpcError> {
+        let meta = meta.and_then(|m| m.get("tracon")).unwrap_or(&Value::Null);
+        let now = now_ms();
+        let (env, nonces) = (&self.auth.env, &self.auth.nonces);
+        let checked = if preview {
+            // A preview writes nothing, so check 7 does not apply.
+            contract::verify(
+                meta,
+                tool,
+                &contract::arguments_sha256(arguments),
+                env,
+                now,
+                nonces,
+            )
+        } else {
+            contract::verify_call(meta, tool, arguments, env, now, nonces)
+        };
+        checked.map_err(|r| {
+            eprintln!(
+                "hoja: refused {} {tool}: {} (check {})",
+                if preview { "preview of" } else { "tool" },
+                r.reason,
+                r.check
+            );
+            RpcError {
+                code: REFUSED,
+                message: format!("refused: {}", r.reason),
+                data: Some(json!({"check": r.check})),
+            }
+        })
+    }
+}
+
+impl Host for Plugin {
+    async fn call(
+        &self,
+        op: &'static ops::Op,
+        arguments: Option<&Value>,
+        meta: Option<&Value>,
+    ) -> Result<Value, RpcError> {
+        let caller = self.check(op.name, arguments, meta, false)?;
+        eprintln!(
+            "hoja: tool {} for {} (session {}, channel {})",
+            op.name,
+            caller.harness.as_deref().unwrap_or("-"),
+            caller.session.as_deref().unwrap_or("-"),
+            caller.channel
+        );
+        let args = arguments.cloned().unwrap_or(Value::Null);
+        let (status, body) = ops::answer(ops::run(&self.app, caller.agent(), op, args).await).await;
+        Ok(mcp::tool_result(status.is_success(), &body))
+    }
+
+    /// hoja can't show a call's effect ahead of it: whether a write lands or
+    /// becomes a card is decided by its gates when it runs, and a card is
+    /// what the person reviews, in hoja. So every preview says why instead,
+    /// which lets the operator allow the call.
+    async fn preview(&self, params: &Value) -> Result<Value, RpcError> {
+        let name = params["name"].as_str().unwrap_or_default();
+        let op = ops::find(name)
+            .ok_or_else(|| RpcError::new(-32602, format!("hoja has no tool {name}")))?;
+        let meta = params.get("_meta").filter(|m| !m.is_null());
+        self.check(op.name, params.get("arguments"), meta, true)?;
+        let body = if op.writes {
+            "hoja decides this write under its own gates when it runs: where the document \
+             type lets this agent write directly it lands as a revision attributed to the \
+             agent; otherwise it becomes a card in hoja's queue, which the person accepts, \
+             rejects or sends back in hoja's page. Fields only the person may write are \
+             refused. Allowing this lets the call reach hoja; it does not accept the change."
+        } else {
+            "A read: it changes nothing."
+        };
+        Ok(json!({
+            "previewable": false,
+            "summary": format!("hoja {}", op.name),
+            "body": body,
+            "token": null,
+        }))
+    }
 }
 
 /// MCP: one JSON-RPC message per POST, its answer as JSON, 202 for a
 /// notification.
-async fn mcp(body: Bytes) -> Response {
+async fn serve_mcp(State(plugin): State<Plugin>, body: Bytes) -> Response {
     let msg: Value = match serde_json::from_slice(&body) {
         Ok(msg) => msg,
         Err(e) => {
-            let answer = rpc_error(Value::Null, -32700, &format!("parse error: {e}"));
+            let answer = mcp::parse_error(&e.to_string());
             return (StatusCode::BAD_REQUEST, Json(answer)).into_response();
         }
     };
-    match mcp_answer(&msg) {
+    match mcp::handle(&plugin, &msg).await {
         Some(answer) => Json(answer).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -277,12 +354,17 @@ async fn mcp(body: Bytes) -> Response {
 
 /// The socket's router: MCP and the person's API, nothing else.
 pub fn router(app: App, auth: Arc<Auth>) -> Router {
+    let plugin = Plugin {
+        app: app.clone(),
+        auth: auth.clone(),
+    };
     http::person_api()
-        .route("/", post(mcp))
+        .into_router()
+        .with_state(app)
+        .route("/", post(serve_mcp).with_state(plugin))
         .fallback(http::not_found)
         .layer(DefaultBodyLimit::max(http::BODY_LIMIT))
         .layer(middleware::from_fn_with_state(auth, guard))
-        .with_state(app)
 }
 
 fn bind_socket(socket: &Path) -> Result<tokio::net::UnixListener> {
@@ -461,23 +543,5 @@ mod tests {
             ))
             .is_err()
         );
-    }
-
-    #[test]
-    fn mcp_answers_initialize_list_and_notifications() {
-        let init = mcp_answer(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2025-03-26"}}))
-        .unwrap();
-        assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(init["result"]["serverInfo"]["name"], "hoja");
-        let list = mcp_answer(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"], json!([]));
-        assert!(
-            mcp_answer(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none()
-        );
-        let call = mcp_answer(&json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-            "params": {"name": "x"}}))
-        .unwrap();
-        assert_eq!(call["error"]["code"], -32602);
     }
 }

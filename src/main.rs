@@ -57,6 +57,10 @@ enum Command {
         #[arg(long, requires = "socket")]
         data: Option<PathBuf>,
     },
+    /// Serve hoja's agent tools over MCP on stdio, for any MCP client. Each
+    /// tool is the agent API call of the same name, sent to the hoja server
+    /// as --agent, so the server's gates and the person's page apply.
+    Mcp,
     /// List accepted document types and their fields.
     Types,
     /// List records.
@@ -230,6 +234,10 @@ async fn agent_command(cli: Cli) -> Result<()> {
     let seg = client::segment;
     let value = match cli.command {
         Command::Serve { .. } => unreachable!(),
+        Command::Mcp => {
+            let host = hoja::mcp::Standalone { client };
+            return hoja::mcp::stdio(Arc::new(host)).await;
+        }
         Command::Types => client.get("types").await?,
         Command::Records { type_name, kind } => {
             let mut query = Vec::new();

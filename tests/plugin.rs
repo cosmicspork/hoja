@@ -528,7 +528,14 @@ async fn mcp_answers_and_sigterm_removes_the_socket() {
         .mcp(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
         .await;
     assert_eq!(status, 200);
-    assert_eq!(list["result"], json!({"tools": []}));
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    let ops: Vec<&str> = hoja::ops::OPS.iter().map(|op| op.name).collect();
+    assert_eq!(names, ops);
 
     let pid = plugin.child.id().unwrap();
     let killed = std::process::Command::new("kill")
@@ -601,4 +608,184 @@ async fn pdfs_render_with_typst_found_without_a_path() {
     let (status, pdf) = plugin.person("POST", "/api/templates/preview", &body).await;
     assert_eq!(status, 200, "{pdf}");
     assert_eq!(pdf["pdf"], true, "{pdf}");
+}
+
+/// The context the node signs onto a tool call or a preview of one.
+fn tool_context(tool: &str, args: &Value, kind: &str, harness: Value) -> Value {
+    let now = now_ms();
+    contract::sign(
+        &json!({
+            "v": 1,
+            "plugin": "hoja",
+            "instance": contract::instance_of(TOKEN),
+            "tool": tool,
+            "arguments_sha256": contract::arguments_sha256(Some(args)),
+            "caller": {"kind": kind, "session": "s-1", "harness": harness},
+            "channel": "personal",
+            "approval_id": null,
+            "issued_ms": now,
+            "expires_ms": now + 30_000,
+            "nonce": uuid::Uuid::new_v4().simple().to_string(),
+            "credentials": {},
+        }),
+        &key(),
+    )
+}
+
+impl Plugin {
+    /// A `tools/call` with the given `_meta.tracon`: the JSON-RPC answer.
+    async fn call_with(&self, tool: &str, args: &Value, meta: Value) -> Value {
+        let (status, answer) = self
+            .mcp(&json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": {"name": tool, "arguments": args, "_meta": {"tracon": meta}}}))
+            .await;
+        assert_eq!(status, 200, "{answer}");
+        answer
+    }
+
+    /// A tool call signed for the agent `claude`: whether it was an error,
+    /// and the agent API's body.
+    async fn tool(&self, tool: &str, args: Value) -> (bool, Value) {
+        let meta = tool_context(tool, &args, "agent", json!("claude"));
+        let answer = self.call_with(tool, &args, meta).await;
+        let result = &answer["result"];
+        assert!(result.is_object(), "{answer}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        (
+            result["isError"] == true,
+            serde_json::from_str(text).unwrap(),
+        )
+    }
+}
+
+#[tokio::test]
+async fn tools_run_as_the_agent_the_node_names_under_hojas_gates() {
+    let plugin = Plugin::start(copy_example).await;
+    plugin.accept("status-report").await;
+    plugin.accept("raid").await;
+
+    let (error, types) = plugin.tool("types", json!({})).await;
+    assert!(!error);
+    assert!(
+        types
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "raid")
+    );
+
+    // An item agents may write directly lands, authored by the harness the
+    // node signed, not by anything in the arguments.
+    let (error, created) = plugin
+        .tool(
+            "record_create",
+            json!({"type": "status-report", "kind": "item",
+                   "fields": {"text": "Shipped", "status": "done", "refs": ["!1"]}}),
+        )
+        .await;
+    assert!(!error, "{created}");
+    assert_eq!(created["state"], "applied");
+    assert_eq!(created["result"]["created_by"]["agent"], "claude");
+    let id = created["result"]["id"].as_str().unwrap().to_string();
+
+    let (error, shown) = plugin.tool("record_show", json!({"id": id})).await;
+    assert!(!error);
+    assert_eq!(shown["record"]["version"], 1);
+
+    // A risk is a card for the person; the agent waits on it with card_status.
+    let (error, risk) = plugin
+        .tool(
+            "record_create",
+            json!({"type": "raid", "kind": "risk", "note": "Raised in standup",
+                   "fields": {"title": "Vendor slips", "description": "The vendor may slip."}}),
+        )
+        .await;
+    assert!(!error, "{risk}");
+    assert_eq!(risk["state"], "awaiting_person");
+    let card = risk["approval_id"].as_str().unwrap().to_string();
+    let (error, status) = plugin
+        .tool("card_status", json!({"approval_id": card, "wait": 0}))
+        .await;
+    assert!(!error);
+    assert_eq!(status["state"], "still_waiting");
+
+    // Errors are the agent API's, flagged as tool errors.
+    let (error, stale) = plugin
+        .tool(
+            "record_edit",
+            json!({"id": id, "version": 9, "fields": {"text": "Changed"}}),
+        )
+        .await;
+    assert!(error);
+    assert_eq!(stale["error"], "conflict", "{stale}");
+    let (error, missing) = plugin.tool("record_edit", json!({"version": 1})).await;
+    assert!(error);
+    assert!(missing["message"].as_str().unwrap().contains("`id`"));
+    let (error, unknown) = plugin
+        .tool("records", json!({"type": "raid", "colour": "red"}))
+        .await;
+    assert!(error, "{unknown}");
+}
+
+#[tokio::test]
+async fn tool_calls_need_an_agent_context_for_exactly_that_call() {
+    let plugin = Plugin::start(copy_example).await;
+    plugin.accept("status-report").await;
+    let args = json!({"type": "status-report", "kind": "item",
+                      "fields": {"text": "x", "status": "done", "refs": ["!1"]}});
+    let refused = |answer: &Value, check: u8| {
+        assert_eq!(answer["error"]["code"], -32001, "{answer}");
+        assert_eq!(answer["error"]["data"]["check"], check, "{answer}");
+    };
+
+    refused(
+        &plugin.call_with("record_create", &args, Value::Null).await,
+        1,
+    );
+    let other = json!({"type": "status-report", "kind": "item", "fields": {}});
+    let meta = tool_context("record_create", &other, "agent", json!("claude"));
+    refused(&plugin.call_with("record_create", &args, meta).await, 3);
+    let meta = tool_context("types", &args, "agent", json!("claude"));
+    refused(&plugin.call_with("record_create", &args, meta).await, 3);
+    let meta = tool_context("record_create", &args, "operator", Value::Null);
+    refused(&plugin.call_with("record_create", &args, meta).await, 7);
+
+    let meta = tool_context("record_create", &args, "agent", json!("claude"));
+    let first = plugin.call_with("record_create", &args, meta.clone()).await;
+    assert_eq!(first["result"]["isError"], false, "{first}");
+    refused(&plugin.call_with("record_create", &args, meta).await, 6);
+    assert_eq!(plugin.records().await.len(), 1);
+
+    // A harness hoja can't record as a name is recorded as `agent`.
+    let meta = tool_context("record_create", &args, "agent", json!("two words"));
+    let answer = plugin.call_with("record_create", &args, meta).await;
+    assert_eq!(answer["result"]["isError"], false, "{answer}");
+    let names: Vec<Value> = plugin
+        .records()
+        .await
+        .iter()
+        .map(|r| r["created_by"]["agent"].clone())
+        .collect();
+    assert!(names.contains(&json!("agent")), "{names:?}");
+}
+
+#[tokio::test]
+async fn previews_say_why_they_show_nothing_and_change_nothing() {
+    let plugin = Plugin::start(copy_example).await;
+    plugin.accept("status-report").await;
+    let args = json!({"type": "status-report", "kind": "item",
+                      "fields": {"text": "x", "status": "done", "refs": ["!1"]}});
+    let preview = |meta: Value| {
+        json!({"jsonrpc": "2.0", "id": 9, "method": "tracon/preview",
+               "params": {"name": "record_create", "arguments": args, "_meta": {"tracon": meta}}})
+    };
+    let meta = tool_context("record_create", &args, "agent", json!("claude"));
+    let (status, answer) = plugin.mcp(&preview(meta)).await;
+    assert_eq!(status, 200);
+    assert_eq!(answer["result"]["previewable"], false, "{answer}");
+    assert!(answer["result"]["body"].as_str().unwrap().contains("card"));
+    assert!(plugin.records().await.is_empty());
+
+    let (_, answer) = plugin.mcp(&preview(Value::Null)).await;
+    assert_eq!(answer["error"]["code"], -32001, "{answer}");
 }

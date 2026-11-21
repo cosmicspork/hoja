@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -193,25 +194,34 @@ pub struct LintFinding {
     pub field: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRecord {
+    /// The accepted document type the record belongs to.
     #[serde(rename = "type")]
     pub type_name: String,
+    /// The record kind, one the type declares.
     pub kind: String,
+    /// Field values by name, as the kind declares them.
     #[serde(default)]
     pub fields: Map<String, Value>,
+    /// Why, shown to the person on any card this opens.
     #[serde(default)]
+    #[schemars(extend("x-tracon-format" = "markdown"))]
     pub note: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateRecord {
+    /// The version you read. A change against an older one is refused, and a
+    /// card opened against it goes stale if the record moves.
     pub version: i64,
     /// A patch: only the named fields change; null clears one.
     pub fields: Map<String, Value>,
+    /// Why, shown to the person on any card this opens.
     #[serde(default)]
+    #[schemars(extend("x-tracon-format" = "markdown"))]
     pub note: String,
 }
 
@@ -243,37 +253,111 @@ pub struct AcceptTemplate {
     pub hash: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateDocument {
+    /// The accepted document type.
     #[serde(rename = "type")]
     pub type_name: String,
     pub title: String,
+    /// Document field values by name, as the type declares them.
     #[serde(default)]
     pub fields: Map<String, Value>,
+    /// Why, shown to the person on any card this opens.
     #[serde(default)]
+    #[schemars(extend("x-tracon-format" = "markdown"))]
     pub note: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateDocument {
+    /// The version you read. A change against an older one is refused, and a
+    /// card opened against it goes stale if the document moves.
     pub version: i64,
+    /// A new title; omit to keep it.
     #[serde(default)]
     pub title: Option<String>,
+    /// A patch: only the named fields change; null clears one.
     #[serde(default)]
     pub fields: Map<String, Value>,
+    /// Why, shown to the person on any card this opens.
     #[serde(default)]
+    #[schemars(extend("x-tracon-format" = "markdown"))]
     pub note: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SelectSection {
+    /// The document version you read.
     pub version: i64,
+    /// The section's records, in order. Records left out are omitted; an
+    /// empty list clears the section.
     pub record_ids: Vec<String>,
+    /// Why, shown to the person on any card this opens.
     #[serde(default)]
+    #[schemars(extend("x-tracon-format" = "markdown"))]
     pub note: String,
+}
+
+/// No input.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Empty {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListRecords {
+    /// Only records of this document type.
+    #[serde(rename = "type", default)]
+    pub type_name: Option<String>,
+    /// Only records of this kind.
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListDocuments {
+    /// Only documents of this type.
+    #[serde(rename = "type", default)]
+    pub type_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BuildDocument {
+    /// The export to write, one the type lists in `exports`.
+    pub format: crate::config::Format,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardStatus {
+    /// Seconds to wait for the person's decision, at most 45; 0 answers at
+    /// once. Over HTTP this is the `wait` query parameter.
+    #[serde(default, deserialize_with = "whole_seconds")]
+    #[schemars(with = "Option<u64>")]
+    pub wait: Option<u64>,
+}
+
+/// A count of seconds, as a JSON integer or, from a query string, digits.
+fn whole_seconds<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Seconds {
+        Number(u64),
+        Text(String),
+    }
+    match Option::<Seconds>::deserialize(d)? {
+        None => Ok(None),
+        Some(Seconds::Number(n)) => Ok(Some(n)),
+        Some(Seconds::Text(t)) => t
+            .parse()
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom("wait must be a whole number of seconds")),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

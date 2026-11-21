@@ -1,6 +1,7 @@
 // Handlers return a ready `Response` as their error, which is how axum expects it.
 #![allow(clippy::result_large_err)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,10 +9,11 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, Request, State, rejection::BytesRejection},
+    handler::Handler,
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{MethodRouter, get, post, put},
 };
 use rust_embed::Embed;
 use serde::Deserialize;
@@ -22,9 +24,10 @@ use crate::config::{Format, Workspace};
 use crate::gates::Actor;
 use crate::lint;
 use crate::model::{
-    AcceptTemplate, AcceptType, Approve, CreateDocument, CreateRecord, Decide, Outcome,
-    SelectSection, SetReviewed, UpdateDocument, UpdateRecord, VersionOnly,
+    AcceptTemplate, AcceptType, Approve, CreateDocument, CreateRecord, Decide, ListDocuments,
+    ListRecords, Outcome, SelectSection, SetReviewed, UpdateDocument, UpdateRecord, VersionOnly,
 };
+use crate::ops::{self, Op, Verb};
 use crate::render::{self, RenderError, Typst};
 use crate::store::{Resolved, Store, StoreError};
 
@@ -134,7 +137,7 @@ fn outcome<T: serde::Serialize>(outcome: Outcome<T>) -> Response {
     (status, Json(outcome)).into_response()
 }
 
-async fn run_outcome<T: serde::Serialize + Send + 'static>(
+pub(crate) async fn run_outcome<T: serde::Serialize + Send + 'static>(
     job: impl FnOnce() -> Result<Outcome<T>, StoreError> + Send + 'static,
 ) -> Response {
     match blocking(job).await {
@@ -144,17 +147,22 @@ async fn run_outcome<T: serde::Serialize + Send + 'static>(
     }
 }
 
+/// An agent name hoja records: 1 to 64 letters, digits, dots, dashes or
+/// underscores.
+pub fn valid_agent_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 fn agent_actor(headers: &HeaderMap) -> Result<Actor, Response> {
     let name = headers
         .get(AGENT_HEADER)
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
-    let valid = !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    if !valid {
+    if !valid_agent_name(name) {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -180,11 +188,6 @@ struct ListQuery {
 #[serde(deny_unknown_fields)]
 struct ExportInput {
     format: Format,
-}
-
-#[derive(Deserialize)]
-struct WaitQuery {
-    wait: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -610,8 +613,11 @@ async fn decide(
 }
 
 // ---- agents ---------------------------------------------------------------
+//
+// What `ops::run` calls for the reads and the build; the agent's writes go
+// straight to the store through `run_outcome`.
 
-async fn agent_types(State(app): State<App>) -> ApiResult {
+pub(crate) async fn agent_types(app: App) -> Response {
     run(move || {
         let types = app.store.accepted_types()?;
         Ok(types
@@ -620,120 +626,110 @@ async fn agent_types(State(app): State<App>) -> ApiResult {
             .collect::<Vec<_>>())
     })
     .await
+    .into_response()
 }
 
-async fn agent_document(State(app): State<App>, Path(id): Path<String>) -> ApiResult {
-    run(move || Ok(document_view(&app, &app.store.resolve(&id)?))).await
+pub(crate) async fn agent_records(app: App, q: ListRecords) -> Response {
+    run(move || app.store.records(q.type_name.as_deref(), q.kind.as_deref()))
+        .await
+        .into_response()
 }
 
-async fn agent_create_record(
-    State(app): State<App>,
-    headers: HeaderMap,
-    bytes: Result<Bytes, BytesRejection>,
-) -> Response {
-    let (actor, input) =
-        match agent_actor(&headers).and_then(|a| Ok((a, parse::<CreateRecord>(bytes)?))) {
-            Ok(v) => v,
-            Err(response) => return response,
-        };
-    run_outcome(move || app.store.create_record(&actor, input)).await
+pub(crate) async fn agent_record(app: App, id: String) -> Response {
+    record(State(app), Path(id)).await.into_response()
 }
 
-async fn agent_update_record(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    bytes: Result<Bytes, BytesRejection>,
-) -> Response {
-    let (actor, input) =
-        match agent_actor(&headers).and_then(|a| Ok((a, parse::<UpdateRecord>(bytes)?))) {
-            Ok(v) => v,
-            Err(response) => return response,
-        };
-    run_outcome(move || app.store.update_record(&actor, &id, input)).await
+pub(crate) async fn agent_documents(app: App, q: ListDocuments) -> Response {
+    run(move || app.store.documents(q.type_name.as_deref()))
+        .await
+        .into_response()
 }
 
-async fn agent_create_document(
-    State(app): State<App>,
-    headers: HeaderMap,
-    bytes: Result<Bytes, BytesRejection>,
-) -> Response {
-    let (actor, input) =
-        match agent_actor(&headers).and_then(|a| Ok((a, parse::<CreateDocument>(bytes)?))) {
-            Ok(v) => v,
-            Err(response) => return response,
-        };
-    run_outcome(move || app.store.create_document(&actor, input)).await
+pub(crate) async fn agent_document(app: App, id: String) -> Response {
+    run(move || Ok(document_view(&app, &app.store.resolve(&id)?)))
+        .await
+        .into_response()
 }
 
-async fn agent_update_document(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    bytes: Result<Bytes, BytesRejection>,
-) -> Response {
-    let (actor, input) =
-        match agent_actor(&headers).and_then(|a| Ok((a, parse::<UpdateDocument>(bytes)?))) {
-            Ok(v) => v,
-            Err(response) => return response,
-        };
-    run_outcome(move || app.store.update_document(&actor, &id, input)).await
-}
-
-async fn agent_select(
-    State(app): State<App>,
-    headers: HeaderMap,
-    Path((id, section)): Path<(String, String)>,
-    bytes: Result<Bytes, BytesRejection>,
-) -> Response {
-    let (actor, input) =
-        match agent_actor(&headers).and_then(|a| Ok((a, parse::<SelectSection>(bytes)?))) {
-            Ok(v) => v,
-            Err(response) => return response,
-        };
-    run_outcome(move || app.store.select(&actor, &id, &section, input)).await
-}
-
-async fn agent_build(
-    State(app): State<App>,
-    Path(id): Path<String>,
-    bytes: Result<Bytes, BytesRejection>,
-) -> ApiResult {
-    let input: ExportInput = parse(bytes)?;
-    export(&app, id, input.format).await
+pub(crate) async fn agent_build(app: App, id: String, format: Format) -> Response {
+    export(&app, id, format).await.into_response()
 }
 
 /// Long-polls a card for at most 45 seconds, the same contract as Tracon's
 /// `approval_status`: `still_waiting` means ask again with the same id.
-async fn agent_wait(
-    State(app): State<App>,
-    Path(id): Path<String>,
-    Query(q): Query<WaitQuery>,
-) -> ApiResult {
-    let deadline = Instant::now() + Duration::from_secs(q.wait.unwrap_or(0).min(MAX_WAIT));
+pub(crate) async fn agent_wait(app: App, id: String, wait: Option<u64>) -> Response {
+    let deadline = Instant::now() + Duration::from_secs(wait.unwrap_or(0).min(MAX_WAIT));
     loop {
         let store = app.store.clone();
         let lookup = id.clone();
-        let approval = blocking(move || store.approval(&lookup))
-            .await?
-            .map_err(store_error)?;
+        let approval = match blocking(move || store.approval(&lookup)).await {
+            Ok(Ok(approval)) => approval,
+            Ok(Err(e)) => return store_error(e),
+            Err(response) => return response,
+        };
         if approval.state != "pending" || Instant::now() >= deadline {
             let state = if approval.state == "pending" {
                 "still_waiting"
             } else {
                 approval.state.as_str()
             };
-            return Ok(Json(json!({
+            return Json(json!({
                 "approval_id": approval.id,
                 "state": state,
                 "reason": approval.reason,
                 "edited": approval.edited,
                 "result": approval.result,
                 "stale": approval.stale,
-            })));
+            }))
+            .into_response();
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+/// One agent API request, whatever the operation: the path's params, and
+/// the query (GET) or JSON body (POST), become the tool's arguments, and
+/// `ops::run` answers them exactly as it answers the tool.
+async fn agent_call(
+    op: &'static Op,
+    app: App,
+    headers: HeaderMap,
+    params: HashMap<String, String>,
+    query: HashMap<String, String>,
+    bytes: Result<Bytes, BytesRejection>,
+) -> Response {
+    let actor = match agent_actor(&headers) {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let mut args = match op.verb {
+        Verb::Get => query
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect(),
+        Verb::Post => match parse::<Value>(bytes) {
+            Ok(Value::Object(map)) => map,
+            Ok(_) => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "The body must be a JSON object.",
+                );
+            }
+            Err(response) => return response,
+        },
+    };
+    for (name, value) in params {
+        if args.contains_key(&name) {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                &format!("`{name}` is taken from the path; leave it out of the request."),
+            );
+        }
+        args.insert(name, Value::String(value));
+    }
+    ops::run(&app, actor, op, Value::Object(args)).await
 }
 
 // ---- assets and guard -----------------------------------------------------
@@ -856,43 +852,96 @@ async fn guard(State(app): State<App>, request: Request, next: Next) -> Response
 /// person's, so whatever serves it must first establish that the request is
 /// the person's (the page's own origin standalone, the node's signed context
 /// as a plugin).
-pub fn person_api() -> Router<App> {
-    Router::new()
-        .route("/api/state", get(state))
-        .route("/api/types/{name}/change", get(type_change))
-        .route("/api/types/{name}/accept", post(accept_type))
-        .route("/api/templates/change", get(template_change))
-        .route("/api/templates/accept", post(accept_template))
-        .route("/api/templates/preview", post(template_preview))
-        .route("/api/records", get(records).post(create_record))
-        .route("/api/records/{id}", get(record).put(update_record))
-        .route("/api/records/{id}/reviewed", post(set_reviewed))
-        .route("/api/records/{id}/delete", post(delete_record))
-        .route("/api/documents", get(documents).post(create_document))
-        .route("/api/documents/{id}", get(document).put(update_document))
-        .route("/api/documents/{id}/sections/{section}", put(select))
-        .route("/api/documents/{id}/approve", post(approve))
-        .route("/api/documents/{id}/preview.pdf", get(preview))
-        .route("/api/documents/{id}/export", post(person_export))
-        .route("/api/markdown", post(markdown_preview))
-        .route("/api/approvals", get(approvals))
-        .route("/api/approvals/{id}/decide", post(decide))
+pub fn person_api() -> Api {
+    Api::new()
+        .get("/api/state", state)
+        .get("/api/types/{name}/change", type_change)
+        .post("/api/types/{name}/accept", accept_type)
+        .get("/api/templates/change", template_change)
+        .post("/api/templates/accept", accept_template)
+        .post("/api/templates/preview", template_preview)
+        .get("/api/records", records)
+        .post("/api/records", create_record)
+        .get("/api/records/{id}", record)
+        .put("/api/records/{id}", update_record)
+        .post("/api/records/{id}/reviewed", set_reviewed)
+        .post("/api/records/{id}/delete", delete_record)
+        .get("/api/documents", documents)
+        .post("/api/documents", create_document)
+        .get("/api/documents/{id}", document)
+        .put("/api/documents/{id}", update_document)
+        .put("/api/documents/{id}/sections/{section}", select)
+        .post("/api/documents/{id}/approve", approve)
+        .get("/api/documents/{id}/preview.pdf", preview)
+        .post("/api/documents/{id}/export", person_export)
+        .post("/api/markdown", markdown_preview)
+        .get("/api/approvals", approvals)
+        .post("/api/approvals/{id}/decide", decide)
 }
 
-/// The agent API, mounted at `/api/agent` by the routers that serve it.
-fn agent_api() -> Router<App> {
-    Router::new()
-        .route("/types", get(agent_types))
-        .route("/records", get(records).post(agent_create_record))
-        .route("/records/{id}", get(record).post(agent_update_record))
-        .route("/documents", get(documents).post(agent_create_document))
-        .route(
-            "/documents/{id}",
-            get(agent_document).post(agent_update_document),
-        )
-        .route("/documents/{id}/sections/{section}", post(agent_select))
-        .route("/documents/{id}/build", post(agent_build))
-        .route("/approvals/{id}", get(agent_wait))
+/// A router that keeps a list of the routes it serves, so the parity test
+/// can hold every HTTP route against the tools (`tests/parity.rs`).
+pub struct Api {
+    router: Router<App>,
+    routes: Vec<(Method, String)>,
+}
+
+impl Api {
+    fn new() -> Self {
+        Self {
+            router: Router::new(),
+            routes: Vec::new(),
+        }
+    }
+
+    fn add(mut self, method: Method, path: &str, route: MethodRouter<App>) -> Self {
+        self.routes.push((method, path.to_string()));
+        self.router = self.router.route(path, route);
+        self
+    }
+
+    fn get<H: Handler<T, App>, T: 'static>(self, path: &str, handler: H) -> Self {
+        self.add(Method::GET, path, get(handler))
+    }
+
+    fn post<H: Handler<T, App>, T: 'static>(self, path: &str, handler: H) -> Self {
+        self.add(Method::POST, path, post(handler))
+    }
+
+    fn put<H: Handler<T, App>, T: 'static>(self, path: &str, handler: H) -> Self {
+        self.add(Method::PUT, path, put(handler))
+    }
+
+    /// Each route this serves, as method and path.
+    pub fn routes(&self) -> &[(Method, String)] {
+        &self.routes
+    }
+
+    pub fn into_router(self) -> Router<App> {
+        self.router
+    }
+}
+
+/// The agent API, one route per operation in `ops::OPS`, at the full
+/// `/api/agent/...` path.
+pub fn agent_api() -> Api {
+    let mut api = Api::new();
+    for op in ops::OPS {
+        let handler = move |State(app): State<App>,
+                            headers: HeaderMap,
+                            params: Option<Path<HashMap<String, String>>>,
+                            Query(query): Query<HashMap<String, String>>,
+                            bytes: Result<Bytes, BytesRejection>| async move {
+            let params = params.map(|Path(p)| p).unwrap_or_default();
+            agent_call(op, app, headers, params, query, bytes).await
+        };
+        let route = match op.verb {
+            Verb::Get => get(handler),
+            Verb::Post => post(handler),
+        };
+        api = api.add(op.verb.method(), &op.route(), route);
+    }
+    api
 }
 
 /// A JSON 404 for any path a router does not serve.
@@ -904,7 +953,8 @@ pub(crate) async fn not_found() -> Response {
 /// one loopback port.
 pub fn router(app: App) -> Router {
     person_api()
-        .nest("/api/agent", agent_api())
+        .into_router()
+        .merge(agent_api().into_router())
         .fallback(fallback)
         .route("/", get(asset))
         .route("/assets/{*path}", get(asset))
@@ -916,8 +966,8 @@ pub fn router(app: App) -> Router {
 /// Only the agent API, with the same checks as standalone, for plugin mode's
 /// `agent_listen`: the person's routes and the page are not on it.
 pub fn agent_router(app: App) -> Router {
-    Router::new()
-        .nest("/api/agent", agent_api())
+    agent_api()
+        .into_router()
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
