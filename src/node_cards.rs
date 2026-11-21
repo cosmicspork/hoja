@@ -13,12 +13,18 @@
 //! a card whose target moved since the agent read it is stale, and is
 //! rejected rather than accepted.
 //!
+//! In plugin mode, `crate::plugin` raises each card a tool call opens before
+//! the tool answers, and [`settle_loop`] reads the decisions back while hoja
+//! runs. A card the node can't raise, or one it no longer knows, waits in
+//! hoja's own page.
+//!
 //! Raised for an agent's call, a card passes that call's signed caller
 //! context (`_meta.tracon`) as `on_behalf`, so the node files it with the
 //! agent's session as well, and hoja names the agent from that same context
 //! when it records the card.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -31,6 +37,13 @@ use crate::store::{Store, StoreError};
 /// The node methods a plugin that raises its cards there names in its
 /// manifest (`node_methods`).
 pub const NODE_METHODS: &[&str] = &["approval/request", "approval/status"];
+
+/// What the node answers a call whose params it does not take, among them
+/// an `approval/status` for a card it did not raise for this plugin.
+pub const INVALID_PARAMS: i64 = -32602;
+
+/// How often [`settle_loop`] asks the node about the cards it holds.
+pub const SETTLE_EVERY: Duration = Duration::from_secs(2);
 
 /// The longest a response from the node may be.
 const MAX_RESPONSE: u64 = 4 << 20;
@@ -275,12 +288,28 @@ pub struct Settled {
 pub async fn settle(store: &Store, node: &NodeSocket) -> Result<Vec<Settled>, NodeError> {
     let mut out = Vec::new();
     for (card_id, approval_id) in store.node_cards_waiting()? {
-        let status = node
+        let status = match node
             .call(
                 "approval/status",
                 json!({ "approval_id": approval_id, "wait_secs": 0 }),
             )
-            .await?;
+            .await
+        {
+            Ok(status) => status,
+            // The node says it raised no such card for this plugin and
+            // channel (its state was reset, say), so no decision will come
+            // from there. Unlinked, the card waits in hoja's own page, and
+            // the cards after it still settle.
+            Err(NodeError::Refused { code, message }) if code == INVALID_PARAMS => {
+                store.unlink_node_card(&card_id)?;
+                eprintln!(
+                    "hoja: card {card_id} is back in hoja's own queue: Tracon has no approval \
+                     {approval_id} ({message})"
+                );
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let words = |key: &str| {
             status[key]
                 .as_str()
@@ -338,6 +367,37 @@ pub async fn settle(store: &Store, node: &NodeSocket) -> Result<Vec<Settled>, No
         });
     }
     Ok(out)
+}
+
+/// [`settle`], every [`SETTLE_EVERY`], for as long as the plugin runs. It
+/// starts with what an earlier start raised, since the links are kept in the
+/// store. A failure is logged once, until it changes or clears, and the
+/// cards it holds up keep waiting in both queues.
+pub async fn settle_loop(store: Arc<Store>, node: NodeSocket) {
+    let mut failing: Option<String> = None;
+    loop {
+        match settle(&store, &node).await {
+            Ok(settled) => {
+                if failing.take().is_some() {
+                    eprintln!("hoja: reading decisions from Tracon again");
+                }
+                for s in settled {
+                    eprintln!(
+                        "hoja: card {} {} from Tracon approval {}",
+                        s.card_id, s.state, s.approval_id
+                    );
+                }
+            }
+            Err(e) => {
+                let why = e.to_string();
+                if failing.as_deref() != Some(why.as_str()) {
+                    eprintln!("hoja: could not read decisions from Tracon: {why}");
+                    failing = Some(why);
+                }
+            }
+        }
+        tokio::time::sleep(SETTLE_EVERY).await;
+    }
 }
 
 /// The agent a caller context names, as hoja records it: its harness, such

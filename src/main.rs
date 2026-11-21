@@ -56,6 +56,11 @@ enum Command {
         /// Tracon plugin mode: this instance's data directory.
         #[arg(long, requires = "socket")]
         data: Option<PathBuf>,
+        /// Tracon plugin mode: the node's socket for calls back to it, where
+        /// cards are raised in Tracon's queue. The node passes it when the
+        /// manifest names `node_methods`.
+        #[arg(long, requires = "socket")]
+        node_socket: Option<PathBuf>,
     },
     /// Serve hoja's agent tools over MCP on stdio, for any MCP client. Each
     /// tool is the agent API call of the same name, sent to the hoja server
@@ -381,8 +386,9 @@ async fn main() -> ExitCode {
         Command::Serve {
             socket: Some(socket),
             data: Some(data),
+            node_socket,
             ..
-        } => hoja::plugin::serve(&socket, &data).await,
+        } => hoja::plugin::serve(&socket, &data, node_socket.as_deref()).await,
         Command::Serve {
             workspace,
             port,

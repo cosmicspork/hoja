@@ -14,7 +14,10 @@
 //!   actions (approving, deciding cards, marking reviewed, accepting type
 //!   and template files, deleting) are not tools. A tool needs no approval
 //!   of the node's: hoja's gates decide what an agent's write does, applied
-//!   where the type allows it and a card for the person otherwise.
+//!   where the type allows it and a card for the person otherwise. Given
+//!   `--node-socket`, hoja raises that card in the operator's Tracon queue
+//!   on behalf of the call, and settles the decision back
+//!   (`crate::node_cards`).
 //! - `/api/*` is the person's API. It never carries the agent API: every
 //!   request on it is attested as the operator, so an agent route there
 //!   would turn an agent's write into the person's.
@@ -50,6 +53,7 @@ use crate::config::Workspace;
 use crate::contract::{self, ContractEnv, NonceCache, UiRequest};
 use crate::http::{self, App};
 use crate::mcp::{self, Host, RpcError};
+use crate::node_cards::{self, NodeSocket};
 use crate::ops;
 use crate::render::Typst;
 use crate::store::Store;
@@ -246,6 +250,9 @@ async fn guard(State(auth): State<Arc<Auth>>, request: Request, next: Next) -> R
 pub struct Plugin {
     pub app: App,
     pub auth: Arc<Auth>,
+    /// The node's socket for calls back to it, when it gave one: the cards
+    /// tool calls open are raised in Tracon's queue there.
+    pub node: Option<Arc<NodeSocket>>,
 }
 
 impl Plugin {
@@ -288,6 +295,27 @@ impl Plugin {
     }
 }
 
+impl Plugin {
+    /// Raise the card a write opened in Tracon's queue, on behalf of the
+    /// agent's call, so the operator decides it there and the settle loop
+    /// decides it here. The agent's answer is the same either way. If the
+    /// node gave no socket, or refuses or fails the request (an older node,
+    /// a manifest without the method), the card waits in hoja's own page.
+    async fn relay(&self, body: &Value, on_behalf: Option<&Value>) {
+        let Some(node) = &self.node else { return };
+        if body["state"] != "awaiting_person" {
+            return;
+        }
+        let Some(card) = body["approval_id"].as_str() else {
+            return;
+        };
+        match node_cards::raise(&self.app.store, node, card, on_behalf).await {
+            Ok(approval) => eprintln!("hoja: card {card} raised in Tracon as {approval}"),
+            Err(e) => eprintln!("hoja: card {card} waits in hoja's own queue: {e}"),
+        }
+    }
+}
+
 impl Host for Plugin {
     async fn call(
         &self,
@@ -305,13 +333,16 @@ impl Host for Plugin {
         );
         let args = arguments.cloned().unwrap_or(Value::Null);
         let (status, body) = ops::answer(ops::run(&self.app, caller.agent(), op, args).await).await;
+        if op.writes && status.is_success() {
+            self.relay(&body, meta.and_then(|m| m.get("tracon"))).await;
+        }
         Ok(mcp::tool_result(status.is_success(), &body))
     }
 
     /// hoja can't show a call's effect ahead of it: whether a write lands or
     /// becomes a card is decided by its gates when it runs, and a card is
-    /// what the person reviews, in hoja. So every preview says why instead,
-    /// which lets the operator allow the call.
+    /// what the person reviews. So every preview says why instead, which
+    /// lets the operator allow the call.
     async fn preview(&self, params: &Value) -> Result<Value, RpcError> {
         let name = params["name"].as_str().unwrap_or_default();
         let op = ops::find(name)
@@ -321,9 +352,9 @@ impl Host for Plugin {
         let body = if op.writes {
             "hoja decides this write under its own gates when it runs: where the document \
              type lets this agent write directly it lands as a revision attributed to the \
-             agent; otherwise it becomes a card in hoja's queue, which the person accepts, \
-             rejects or sends back in hoja's page. Fields only the person may write are \
-             refused. Allowing this lets the call reach hoja; it does not accept the change."
+             agent; otherwise it becomes a card for the person, raised in Tracon's queue \
+             as a word diff of its own and shown in hoja's page, decided in either. Fields \
+             only the person may write are refused. Allowing this lets the call reach hoja; it does not accept the change."
         } else {
             "A read: it changes nothing."
         };
@@ -353,10 +384,11 @@ async fn serve_mcp(State(plugin): State<Plugin>, body: Bytes) -> Response {
 }
 
 /// The socket's router: MCP and the person's API, nothing else.
-pub fn router(app: App, auth: Arc<Auth>) -> Router {
+pub fn router(app: App, auth: Arc<Auth>, node: Option<Arc<NodeSocket>>) -> Router {
     let plugin = Plugin {
         app: app.clone(),
         auth: auth.clone(),
+        node,
     };
     http::person_api()
         .into_router()
@@ -396,8 +428,15 @@ async fn signalled() {
     }
 }
 
-pub async fn serve(socket: &Path, data: &Path) -> Result<()> {
+/// Serve as a plugin. `node_socket` is the node's socket for calls back to
+/// it, which the node passes when the manifest names `node_methods`.
+pub async fn serve(socket: &Path, data: &Path, node_socket: Option<&Path>) -> Result<()> {
     let auth = Arc::new(auth(|k| std::env::var(k).ok()).map_err(anyhow::Error::msg)?);
+    // `auth` checked the token is set; the node socket takes it as it is.
+    let node = node_socket.map(|path| {
+        let token = std::env::var("TRACON_PLUGIN_TOKEN").unwrap_or_default();
+        NodeSocket::new(path, token)
+    });
     let config = PluginConfig::load(data)?;
     let workspace = Workspace::open(&config.workspace(data))?;
     let store = Arc::new(Store::init(&workspace.database())?);
@@ -451,6 +490,17 @@ pub async fn serve(socket: &Path, data: &Path) -> Result<()> {
         socket.display(),
         app.workspace.root.display()
     );
+    match &node {
+        Some(node) => {
+            eprintln!(
+                "hoja: raising tool calls' cards in Tracon's queue through {}",
+                node.path.display()
+            );
+            tokio::spawn(node_cards::settle_loop(app.store.clone(), node.clone()));
+        }
+        None => eprintln!("hoja: no node socket; cards wait in hoja's own queue"),
+    }
+    let node = node.map(Arc::new);
 
     let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {
@@ -465,7 +515,7 @@ pub async fn serve(socket: &Path, data: &Path) -> Result<()> {
             .with_graceful_shutdown(until_stopped(stopped.clone()));
         tokio::spawn(async move { serving.await })
     });
-    let served = axum::serve(listener, router(app, auth))
+    let served = axum::serve(listener, router(app, auth, node))
         .with_graceful_shutdown(until_stopped(stopped))
         .await;
     let _ = std::fs::remove_file(socket);
