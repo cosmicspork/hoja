@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/cosmicspork/hoja/compare/v0.3.0...v0.4.0) (2026-11-21)
+
+
+### Features
+
+* offer the agent API as MCP tools, in plugin mode and over stdio ([#10](https://github.com/cosmicspork/hoja/issues/10)) ([dde9e09](https://github.com/cosmicspork/hoja/commit/dde9e09dfef88a61d1835bd6472154da941062f0))
+* raise tool-opened cards in Tracon's queue ([#12](https://github.com/cosmicspork/hoja/issues/12)) ([7cfcd36](https://github.com/cosmicspork/hoja/commit/7cfcd36ac0fc811bccb4a90caf2b3075ca9bc96b))
+
 ## [0.3.0](https://github.com/cosmicspork/hoja/compare/v0.2.0...v0.3.0) (2026-11-20)
 
 
