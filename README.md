@@ -4,7 +4,7 @@ A local tool for working safely with agents to build structured documents.
 
 People and agents edit the same records. Every change records who made it. Agents draft where a document type lets them, and otherwise suggest; the person reviews, accepts, and approves. Typst renders the result.
 
-hoja is a generic engine. Document types are local configuration: a project's charter, RAID log and monthly status report ship here as the example, and resumes or anything else live in your own private workspace. It is a companion to [Tracon](https://github.com/cosmicspork/tracon), like [workboard](https://github.com/cosmicspork/workboard): hoja holds no forge or Jira credentials, so an agent gathers facts through Tracon and submits them here through the CLI.
+hoja is a generic engine. Document types are local configuration: a project's charter, RAID log and monthly status report ship here as the example, and resumes or anything else live in your own private workspace. It is a companion to [Tracon](https://github.com/cosmicspork/tracon), like [workboard](https://github.com/cosmicspork/workboard): hoja holds no forge or Jira credentials, so an agent gathers facts through Tracon and submits them here through hoja's tools (or the CLI).
 
 ## The rules
 
@@ -39,7 +39,7 @@ An agent request that needs the person returns immediately:
 { "state": "awaiting_person", "approval_id": "3cfc…" }
 ```
 
-`hoja wait <approval_id>` long-polls for up to 45 seconds and returns `still_waiting` (ask again with the same id), `accepted` (with the result), `rejected` or `changes_requested` (with the person's reason). This is the same non-blocking shape as Tracon's approval queue, so cards can move there once Tracon supports plugins. Identical pending requests share one card.
+`hoja wait <approval_id>` long-polls for up to 45 seconds and returns `still_waiting` (ask again with the same id), `accepted` (with the result), `rejected` or `changes_requested` (with the person's reason). This is the same non-blocking shape as Tracon's approval queue, which is what lets a card move there (below). Identical pending requests share one card.
 
 ### Cards in Tracon's queue
 
@@ -76,7 +76,7 @@ The example has three types that work together:
 
 ## As a Tracon plugin
 
-hoja also runs as a [Tracon](https://github.com/cosmicspork/tracon) plugin with a UI. Once a release exists:
+hoja also runs as a [Tracon](https://github.com/cosmicspork/tracon) plugin with a UI:
 
 ```sh
 tracon plugin add cosmicspork/hoja
