@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { Banner, Empty, Toggle, WordDiff } from '@tracon/ui/svelte';
   import FieldInput from './FieldInput.svelte';
   import { api, message, type Approval, type FieldConfig, type HojaRecord, type TypeStatus, type Value } from './lib/api';
-  import { fromForm, href, recordLabel, titleOf, toForm, valueDiff, when, wordDiff, type DiffPart } from './lib/views';
+  import { fromForm, href, recordLabel, titleOf, toForm, valueDiff, when, type DiffPart } from './lib/views';
 
   let { types, onchange }: { types: TypeStatus[]; onchange: () => void } = $props();
 
@@ -109,7 +110,7 @@
     <thead><tr><th>Field</th><th>{approval.current ? 'Change' : 'Proposed'}</th></tr></thead>
     <tbody>
       {#if payload.title !== undefined}
-        <tr><td>Title</td><td>{@render diff(wordDiff(approval.current?.title ?? '', payload.title))}</td></tr>
+        <tr><td>Title</td><td><WordDiff before={approval.current?.title ?? ''} after={payload.title} /></td></tr>
       {/if}
       {#each Object.entries(payload.fields ?? {}) as [name, value] (name)}
         <tr>
@@ -117,6 +118,8 @@
           <td>
             {#if fields[name]?.type === 'ref'}
               {@render diff(valueDiff(refLabel(approval.current?.fields?.[name]), refLabel(value)))}
+            {:else if typeof value === 'string' && typeof (approval.current?.fields?.[name] ?? '') === 'string'}
+              <WordDiff before={String(approval.current?.fields?.[name] ?? '')} after={value} />
             {:else}
               {@render diff(valueDiff(approval.current?.fields?.[name], value))}
             {/if}
@@ -134,12 +137,12 @@
     <h1>Approvals</h1>
   </div>
   <div class="actions">
-    <button onclick={load}>Reload</button>
-    <label class="toggle"><input type="checkbox" bind:checked={showDecided} /> Show decided</label>
+    <button class="lnk" onclick={load}>Reload</button>
+    <Toggle checked={showDecided} title="Show decided" onchange={(v) => (showDecided = v)} />
   </div>
 </header>
 
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if error}<Banner tone="crit" role="alert">{error}</Banner>{/if}
 
 {#each pending as approval (approval.id)}
   {@const form = editing[approval.id]}
@@ -151,7 +154,7 @@
       <span class="muted">{titleOf(approval.type, c ?? undefined)} · {when(approval.created_at)}</span>
     </div>
     {#if approval.note}<p class="note">“{approval.note}”</p>{/if}
-    {#if approval.stale}<p class="error">This changed since the agent read it, so it can't be accepted. Reject it or request changes; the agent resubmits against the current version.</p>{/if}
+    {#if approval.stale}<Banner tone="crit">This changed since the agent read it, so it can't be accepted. <b>Reject it or request changes</b><i>The agent resubmits against the current version.</i></Banner>{/if}
 
     {#if approval.action === 'document.select'}
       {@const now = approval.current?.sections?.find(s => s.name === approval.payload.section)?.record_ids ?? []}
@@ -177,18 +180,18 @@
     {/if}
 
     <div class="form-actions">
-      <button class="primary" onclick={() => decide(approval, 'accept')} disabled={busy === approval.id || approval.stale}>{form ? 'Accept with edits' : 'Accept'}</button>
+      <button class="btn p" onclick={() => decide(approval, 'accept')} disabled={busy === approval.id || approval.stale}>{form ? 'Accept with edits' : 'Accept'}</button>
       {#if approval.action !== 'document.select'}
-        {#if form}<button onclick={() => delete editing[approval.id]}>Discard edits</button>{:else}<button onclick={() => startEdit(approval)} disabled={approval.stale}>Edit</button>{/if}
+        {#if form}<button class="btn" onclick={() => delete editing[approval.id]}>Discard edits</button>{:else}<button class="btn" onclick={() => startEdit(approval)} disabled={approval.stale}>Edit</button>{/if}
       {/if}
       <input class="reason" placeholder="Reason or notes for the agent" bind:value={reasons[approval.id]} />
-      <button onclick={() => decide(approval, 'request_changes')} disabled={busy === approval.id}>Request changes</button>
-      <button class="danger" onclick={() => decide(approval, 'reject')} disabled={busy === approval.id}>Reject</button>
-      {#if approval.target_id && approval.action.startsWith('document')}<a class="muted" href={href({ view: 'document', id: approval.target_id })}>Open document</a>{/if}
+      <button class="btn" onclick={() => decide(approval, 'request_changes')} disabled={busy === approval.id}>Request changes</button>
+      <button class="lnk d" onclick={() => decide(approval, 'reject')} disabled={busy === approval.id}>Reject</button>
+      {#if approval.target_id && approval.action.startsWith('document')}<a class="lnk" href={href({ view: 'document', id: approval.target_id })}>Open document</a>{/if}
     </div>
   </article>
 {:else}
-  <p class="empty">No cards waiting. Agents' suggestions show up here.</p>
+  <Empty>No cards waiting. Agents' suggestions show up here.</Empty>
 {/each}
 
 {#if showDecided}
@@ -196,7 +199,7 @@
   <ul class="decided">
     {#each decided as approval (approval.id)}
       <li>
-        <span class="badge {approval.state === 'accepted' ? 'ok' : approval.state === 'rejected' ? 'bad' : 'warn'}">{approval.state.replace('_', ' ')}</span>
+        <span class="badge {approval.state === 'accepted' ? 'ok' : approval.state === 'rejected' ? 'bad' : 'run'}">{approval.state.replace('_', ' ')}</span>
         <span class="badge author agent">{approval.agent}</span> {actionText[approval.action]} {targetLabel(approval)}
         {#if approval.edited}<span class="badge">edited</span>{/if}
         {#if approval.reason}<span class="muted">“{approval.reason}”</span>{/if}

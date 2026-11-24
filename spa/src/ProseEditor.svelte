@@ -39,5 +39,5 @@
 </div>
 <div class="prose-tools">
   <span class="muted">Markdown: **bold**, *italic*, - lists, ## headings</span>
-  <button type="button" class="link" onclick={() => previewing = !previewing}>{previewing ? 'Hide preview' : 'Preview'}</button>
+  <button type="button" class="lnk" onclick={() => previewing = !previewing}>{previewing ? 'Hide preview' : 'Preview'}</button>
 </div>
