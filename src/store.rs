@@ -531,6 +531,7 @@ impl Store {
             kind: Some(&input.kind),
             settled: false,
             fields: &names,
+            cites: kind.cites(&input.fields),
         };
         let route = gates::route(actor, &config, write);
         let fields =
@@ -589,6 +590,7 @@ impl Store {
             kind: Some(&record.kind),
             settled: record.reviewed,
             fields: &names,
+            cites: false,
         };
         let route = gates::route(actor, &config, write);
         if let Route::Refused(reason) = route {
@@ -920,6 +922,7 @@ impl Store {
             kind: None,
             settled: false,
             fields: &names,
+            cites: false,
         };
         let route = gates::route(actor, &config, write);
         let fields = apply_patch(&config.document.fields, &Map::new(), &input.fields)
@@ -972,6 +975,7 @@ impl Store {
             kind: None,
             settled: document.approved_at.is_some(),
             fields: &names,
+            cites: false,
         };
         let route = gates::route(actor, &config, write);
         if let Route::Refused(reason) = route {
@@ -1042,6 +1046,7 @@ impl Store {
             kind: None,
             settled: document.approved_at.is_some(),
             fields: &[],
+            cites: false,
         };
         let route = gates::route(actor, &config, write);
         if let Route::Refused(reason) = route {
@@ -1330,6 +1335,7 @@ impl Store {
                     kind: Some(kind_name),
                     settled: false,
                     fields: &names,
+                    cites: kind.cites(&patch),
                 })?;
                 let fields =
                     apply_patch(&kind.fields, &Map::new(), &patch).map_err(StoreError::Invalid)?;
@@ -1349,6 +1355,7 @@ impl Store {
                     kind: Some(&record.kind),
                     settled: false,
                     fields: &names,
+                    cites: false,
                 })?;
                 let next = apply_patch(&kind.fields, &record.fields, &patch)
                     .map_err(StoreError::Invalid)?;
@@ -1364,6 +1371,7 @@ impl Store {
                     kind: None,
                     settled: false,
                     fields: &names,
+                    cites: false,
                 })?;
                 let title = validate_title(payload["title"].as_str().unwrap_or_default())?;
                 let fields = apply_patch(&config.document.fields, &Map::new(), &patch)
@@ -1381,6 +1389,7 @@ impl Store {
                     kind: None,
                     settled: false,
                     fields: &names,
+                    cites: false,
                 })?;
                 let title = match payload.get("title").and_then(Value::as_str) {
                     Some(title) => validate_title(title)?,

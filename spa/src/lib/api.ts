@@ -11,7 +11,7 @@ export interface FieldConfig {
   options?: string[];
   ref_kind?: string;
 }
-export interface KindConfig { title?: string; label?: string; agent_direct?: boolean; fields: Record<string, FieldConfig> }
+export interface KindConfig { title?: string; label?: string; agent_direct?: boolean; proposal_source?: string; fields: Record<string, FieldConfig> }
 export interface SectionConfig { name: string; title?: string; /** Select records of this other type. */ type?: string; kind: string; where?: Record<string, string>; group_by?: string; item?: string; /** `all` holds every matching record; it isn't selected by hand. */ include?: 'selected' | 'all'; sort?: string }
 export interface TypeConfig {
   title?: string;

@@ -117,7 +117,8 @@
     <h1>{titleOf(kind, kindConfig)}</h1>
   </div>
   <div class="actions">
-    {#if config.first_draft === 'human'}<span class="hint">First drafts are yours; agents can only suggest changes.</span>
+    {#if kindConfig?.proposal_source}<span class="hint">Agents propose new {titleOf(kind, kindConfig).toLowerCase()} records as cards, citing their source in {titleOf(kindConfig.proposal_source, kindConfig.fields[kindConfig.proposal_source]).toLowerCase()}.</span>
+    {:else if config.first_draft === 'human'}<span class="hint">First drafts are yours; agents can only suggest changes.</span>
     {:else if kindConfig?.agent_direct === false}<span class="hint">Agents' new and changed {titleOf(kind, kindConfig).toLowerCase()} records come to you as cards.</span>{/if}
     <button class="primary" onclick={startNew}>New {titleOf(kind, kindConfig).toLowerCase()}</button>
   </div>
