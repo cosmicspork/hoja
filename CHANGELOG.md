@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/cosmicspork/hoja/compare/v0.4.0...v0.5.0) (2026-11-24)
+
+
+### Features
+
+* let agents propose cited fact records in human types ([#15](https://github.com/cosmicspork/hoja/issues/15)) ([5a9fa0b](https://github.com/cosmicspork/hoja/commit/5a9fa0b1da1014fa3d5b5a63440e5ea195c267e7))
+* **spa:** build the page on Tracon's shared UI kit ([#16](https://github.com/cosmicspork/hoja/issues/16)) ([dc299fa](https://github.com/cosmicspork/hoja/commit/dc299fa1a19732a9d21c55ed7f147d5961f418fc))
+
 ## [0.4.0](https://github.com/cosmicspork/hoja/compare/v0.3.0...v0.4.0) (2026-11-21)
 
 
