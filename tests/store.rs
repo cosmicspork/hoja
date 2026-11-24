@@ -29,6 +29,16 @@ ref_kind = "role"
 [kinds.bullet.fields.tags]
 type = "tags"
 
+[kinds.degree]
+proposal_source = "source"
+[kinds.degree.fields.field]
+type = "string"
+required = true
+person_only = true
+[kinds.degree.fields.source]
+type = "text"
+person_only = true
+
 [document.fields.summary]
 type = "text"
 person_only = true
@@ -523,6 +533,72 @@ fn human_types_refuse_agent_first_drafts_and_take_suggestions() {
     assert!(!revision.edited);
     // The creator is still the person.
     assert_eq!(after.created_by.unwrap().author, Author::Person);
+}
+
+#[test]
+fn agents_propose_facts_citing_a_source_and_the_person_accepts_once() {
+    let f = Fixture::new();
+    let degrees = |f: &Fixture| f.store.records(Some("resume"), Some("degree")).unwrap();
+    // No source, no proposal.
+    assert!(matches!(
+        create(
+            &f.store,
+            &agent(),
+            "resume",
+            "degree",
+            json!({"field": "Information Technology"})
+        ),
+        Err(StoreError::Refused(_))
+    ));
+    let id = card(
+        create(
+            &f.store,
+            &agent(),
+            "resume",
+            "degree",
+            json!({"field": "Entrepreneurship", "source": "NAU diploma, 2018"}),
+        )
+        .unwrap(),
+    );
+    assert!(degrees(&f).is_empty());
+
+    // The person can correct the card but not strip its citation.
+    assert!(matches!(
+        accept(
+            &f.store,
+            &id,
+            Some(json!({"kind": "degree", "fields": {"field": "Entrepreneurship", "source": " "}}))
+        ),
+        Err(StoreError::Refused(_))
+    ));
+    assert!(degrees(&f).is_empty());
+    let decided = accept(&f.store, &id, None).unwrap();
+    assert_eq!(decided.state, "accepted");
+    let degree = f
+        .store
+        .record(decided.result.unwrap()["record_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(degree.fields["field"], "Entrepreneurship");
+    assert_eq!(degree.created_by.unwrap().author, Author::AgentAccepted);
+
+    // Accepted once; after that agents can't change it, or its source.
+    for fields in [
+        json!({"field": "Information Technology"}),
+        json!({"source": "a different source"}),
+    ] {
+        assert!(matches!(
+            f.store.update_record(
+                &agent(),
+                &degree.id,
+                UpdateRecord {
+                    version: degree.version,
+                    fields: obj(fields),
+                    note: String::new(),
+                },
+            ),
+            Err(StoreError::Refused(_))
+        ));
+    }
 }
 
 #[test]

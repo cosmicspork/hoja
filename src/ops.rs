@@ -105,7 +105,9 @@ pub const OPS: &[Op] = &[
         true,
         "Create a record. Where the type lets agents write directly it is created at once \
          (state applied); otherwise it becomes a card the person accepts or rejects (state \
-         awaiting_person, with an approval_id for card_status)."
+         awaiting_person, with an approval_id for card_status). A kind with a \
+         proposal_source takes new records only as cards that fill that field with where \
+         the facts come from."
     ),
     op!(
         "record_edit",

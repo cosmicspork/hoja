@@ -48,6 +48,8 @@ pub struct Write<'a> {
     pub settled: bool,
     /// Field names the write sets or clears.
     pub fields: &'a [String],
+    /// A new record fills its kind's `proposal_source` field.
+    pub cites: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +71,22 @@ pub fn person_only_action(actor: &Actor, action: &str) -> Result<(), String> {
 pub fn route(actor: &Actor, config: &TypeConfig, write: Write<'_>) -> Route {
     if *actor == Actor::Person {
         return Route::Direct;
+    }
+    // A kind with a proposal source takes agents' new records only as
+    // proposals the person accepts, each citing where its facts come from.
+    if write.op == Op::Create
+        && let Some(source) = write
+            .kind
+            .and_then(|k| config.kind(k))
+            .and_then(|k| k.proposal_source.as_deref())
+    {
+        return if write.cites {
+            Route::Card
+        } else {
+            Route::Refused(format!(
+                "a proposed record cites where its facts come from in `{source}`"
+            ))
+        };
     }
     let declared = match write.kind {
         None => Some(&config.document.fields),
@@ -141,6 +159,7 @@ person_only = true
             kind,
             settled,
             fields,
+            cites: false,
         }
     }
 
@@ -258,6 +277,67 @@ type = "text"
             route(&agent(), &c, write(Op::Create, Some("issue"), false, &text)),
             Route::Direct
         );
+    }
+
+    fn facts(first_draft: &str) -> TypeConfig {
+        TypeConfig::parse(&format!(
+            r#"
+first_draft = "{first_draft}"
+[kinds.degree]
+proposal_source = "source"
+[kinds.degree.fields.field]
+type = "string"
+person_only = true
+[kinds.degree.fields.source]
+type = "text"
+person_only = true
+[kinds.bullet.fields.text]
+type = "text"
+"#
+        ))
+        .unwrap()
+    }
+
+    fn proposal<'a>(fields: &'a [String], cites: bool) -> Write<'a> {
+        Write {
+            cites,
+            ..write(Op::Create, Some("degree"), false, fields)
+        }
+    }
+
+    #[test]
+    fn agents_propose_cited_records_of_a_proposal_kind_as_cards() {
+        let fields = ["field".to_string(), "source".to_string()];
+        for c in [facts("human"), facts("agent")] {
+            assert_eq!(route(&agent(), &c, proposal(&fields, true)), Route::Card);
+            assert!(matches!(
+                route(&agent(), &c, proposal(&fields[..1], false)),
+                Route::Refused(_)
+            ));
+            assert_eq!(
+                route(&Actor::Person, &c, proposal(&fields[..1], false)),
+                Route::Direct
+            );
+        }
+    }
+
+    #[test]
+    fn a_proposal_kind_opens_nothing_but_new_cited_records() {
+        let c = facts("human");
+        let field = ["field".to_string()];
+        let text = ["text".to_string()];
+        // Once accepted, a fact's person-only fields stay out of agents' reach.
+        let update = Write {
+            cites: true,
+            ..write(Op::Update, Some("degree"), false, &field)
+        };
+        assert!(matches!(route(&agent(), &c, update), Route::Refused(_)));
+        // Other kinds of a human type still refuse agent first drafts.
+        let bullet = Write {
+            cites: true,
+            ..write(Op::Create, Some("bullet"), false, &text)
+        };
+        assert!(matches!(route(&agent(), &c, bullet), Route::Refused(_)));
     }
 
     #[test]

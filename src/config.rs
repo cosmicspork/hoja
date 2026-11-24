@@ -88,10 +88,31 @@ pub struct KindConfig {
     /// through a card, even where the type lets agents draft directly.
     #[serde(default = "yes")]
     pub agent_direct: bool,
+    /// The field in which an agent cites where a new record's facts come
+    /// from. Setting it lets agents propose new records of this kind, always
+    /// as a card and only with this field filled, even in a type whose first
+    /// draft is the person's: facts (a degree, an employer) are looked up,
+    /// not written, so the person checks the source instead of typing them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_source: Option<String>,
     pub fields: IndexMap<String, FieldConfig>,
 }
 
 impl KindConfig {
+    /// Whether `patch` fills this kind's `proposal_source` field. False for a
+    /// kind without one.
+    pub fn cites(&self, patch: &Map<String, Value>) -> bool {
+        let Some(name) = &self.proposal_source else {
+            return false;
+        };
+        match (self.fields.get(name), patch.get(name)) {
+            (Some(field), Some(value)) => {
+                matches!(normalize_value(name, field, value), Ok(Some(_)))
+            }
+            _ => false,
+        }
+    }
+
     pub fn label_field(&self) -> Option<&str> {
         self.label.as_deref().or_else(|| {
             self.fields
@@ -326,6 +347,15 @@ impl TypeConfig {
                 && !kind.fields.contains_key(label)
             {
                 bail!("kind `{name}` labels itself with unknown field `{label}`");
+            }
+            if let Some(source) = &kind.proposal_source {
+                match kind.fields.get(source).map(|f| f.ty) {
+                    Some(FieldType::String | FieldType::Text | FieldType::List) => {}
+                    Some(_) => bail!(
+                        "kind `{name}`: proposal_source `{source}` must be a string, text or list field"
+                    ),
+                    None => bail!("kind `{name}`: proposal_source names unknown field `{source}`"),
+                }
             }
         }
         validate_fields("document", &self.document.fields, &self.kinds)?;
@@ -824,6 +854,35 @@ required = true
     }
 
     #[test]
+    fn a_proposal_cites_only_with_a_filled_source() {
+        let config = TypeConfig::parse(
+            "first_draft = \"human\"\n[kinds.degree]\nproposal_source = \"sources\"\n\
+             [kinds.degree.fields.field]\ntype = \"string\"\n\
+             [kinds.degree.fields.sources]\ntype = \"list\"\n\
+             [kinds.note.fields.text]\ntype = \"text\"",
+        )
+        .unwrap();
+        let degree = config.kind("degree").unwrap();
+        let patch = |v: serde_json::Value| v.as_object().unwrap().clone();
+        assert!(degree.cites(&patch(json!({"sources": ["transcript.pdf p.1"]}))));
+        for missing in [
+            json!({"field": "Entrepreneurship"}),
+            json!({"sources": []}),
+            json!({"sources": ["  "]}),
+            json!({"sources": null}),
+            json!({"sources": "not a list"}),
+        ] {
+            assert!(!degree.cites(&patch(missing.clone())), "{missing}");
+        }
+        assert!(
+            !config
+                .kind("note")
+                .unwrap()
+                .cites(&patch(json!({"text": "x"})))
+        );
+    }
+
+    #[test]
     fn rejects_unknown_keys_and_bad_references() {
         for body in [
             "first_draft = \"human\"\nloosen = true\n[kinds.a.fields.t]\ntype = \"text\"",
@@ -838,6 +897,8 @@ required = true
             "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[document.sections]]\nname = \"s\"\nkind = \"a\"\nsort = \"t\"",
             "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[document.sections]]\nname = \"s\"\nkind = \"a\"\ninclude = \"all\"\nsort = \"nope\"",
             "first_draft = \"human\"\n[kinds.a.fields.t]\ntype = \"text\"\n[[document.sections]]\nname = \"s\"\nkind = \"a\"\ninclude = \"some\"",
+            "first_draft = \"human\"\n[kinds.a]\nproposal_source = \"nope\"\n[kinds.a.fields.t]\ntype = \"text\"",
+            "first_draft = \"human\"\n[kinds.a]\nproposal_source = \"d\"\n[kinds.a.fields.d]\ntype = \"date\"",
         ] {
             assert!(TypeConfig::parse(body).is_err(), "{body}");
         }
