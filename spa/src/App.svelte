@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Banner, Empty } from '@tracon/ui/svelte';
   import { onMount } from 'svelte';
   import ApprovalsView from './ApprovalsView.svelte';
   import DocumentView from './DocumentView.svelte';
@@ -55,10 +56,9 @@
 
 <div class="app-shell">
   <nav class="sidebar" aria-label="Sections">
-    <a class="brand" href={href({ view: 'documents' })}><img src="./hoja.svg" alt="" width="26" height="26" /> hoja</a>
     <a class="nav" class:active={active({ view: 'documents' })} href={href({ view: 'documents' })}>Documents</a>
     <a class="nav" class:active={active({ view: 'approvals' })} href={href({ view: 'approvals' })}>
-      Approvals {#if app?.pending_approvals}<span class="count">{app.pending_approvals}</span>{/if}
+      Approvals {#if app?.pending_approvals}<span class="count" title="Waiting on you">{app.pending_approvals}</span>{/if}
     </a>
     {#each accepted as t (t.name)}
       <p class="nav-group">{titleOf(t.name, t.config ?? undefined)}</p>
@@ -67,16 +67,16 @@
       {/each}
     {/each}
     <a class="nav settings" class:active={active({ view: 'types' })} href={href({ view: 'types' })}>
-      Types {#if pendingTypes}<span class="count warn">{pendingTypes}</span>{/if}
+      Types {#if pendingTypes}<span class="count" title="Waiting on you">{pendingTypes}</span>{/if}
     </a>
     {#if app}<p class="workspace" title={app.workspace}>{app.owner ?? 'Workspace'}<br /><span>{app.workspace}</span></p>{/if}
   </nav>
 
   <main class="content">
     {#if loadError}
-      <p class="error" role="alert">{loadError}</p>
+      <Banner tone="crit" role="alert">{loadError}</Banner>
     {:else if !app}
-      <p class="empty">Loading…</p>
+      <Empty loading>Loading…</Empty>
     {:else if route.view === 'documents'}
       <DocumentsView types={app.types} onchange={refresh} />
     {:else if route.view === 'document'}
@@ -84,7 +84,7 @@
       {#if config}
         {#key route.id}<DocumentView id={route.id} {config} configs={Object.fromEntries(accepted.map(t => [t.name, t.config!]))} onchange={refresh} />{/key}
       {:else}
-        <p class="empty">Loading…</p>
+        <Empty loading>Loading…</Empty>
       {/if}
     {:else if route.view === 'records'}
       {@const config = configOf(route.type)}

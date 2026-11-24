@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Banner, Empty, Row } from '@tracon/ui/svelte';
   import FieldInput from './FieldInput.svelte';
   import Revisions from './Revisions.svelte';
   import { api, message, type HojaRecord, type Revision, type TypeConfig } from './lib/api';
@@ -120,29 +121,32 @@
     {#if kindConfig?.proposal_source}<span class="hint">Agents propose new {titleOf(kind, kindConfig).toLowerCase()} records as cards, citing their source in {titleOf(kindConfig.proposal_source, kindConfig.fields[kindConfig.proposal_source]).toLowerCase()}.</span>
     {:else if config.first_draft === 'human'}<span class="hint">First drafts are yours; agents can only suggest changes.</span>
     {:else if kindConfig?.agent_direct === false}<span class="hint">Agents' new and changed {titleOf(kind, kindConfig).toLowerCase()} records come to you as cards.</span>{/if}
-    <button class="primary" onclick={startNew}>New {titleOf(kind, kindConfig).toLowerCase()}</button>
+    <button class="btn" onclick={startNew}>New {titleOf(kind, kindConfig).toLowerCase()}</button>
   </div>
 </header>
 
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if error}<Banner tone="crit" role="alert">{error}</Banner>{/if}
 
 <div class="split">
   <section class="list-pane">
     <input class="search" type="search" placeholder="Search" bind:value={query} />
     {#if records.length === 0}
-      <p class="empty">No {titleOf(kind, kindConfig).toLowerCase()} records yet.</p>
+      <Empty>No {titleOf(kind, kindConfig).toLowerCase()} records yet.</Empty>
     {/if}
     <ul class="record-list">
       {#each records as record (record.id)}
-        <li>
-          <a href={href({ view: 'records', type: typeName, kind, id: record.id })} class:active={record.id === current?.id}>
-            <span class="label">{recordLabel(config, record)}</span>
-            <span class="meta">
-              {#if record.reviewed}<span class="badge ok">reviewed</span>{/if}
-              <span class="badge author {record.created_by?.author}">{authorText(record.created_by)}</span>
-              {#each (record.fields.tags as string[] | undefined) ?? [] as tag (tag)}<span class="tag">{tag}</span>{/each}
+        <li class:active={record.id === current?.id}>
+          <Row href={href({ view: 'records', type: typeName, kind, id: record.id })} gap={0}>
+            {#snippet lead()}<span class="bar" aria-hidden="true"></span>{/snippet}
+            <span class="rec">
+              <span class="label">{recordLabel(config, record)}</span>
+              <span class="meta">
+                {#if record.reviewed}<span class="badge ok">reviewed</span>{/if}
+                <span class="badge author {record.created_by?.author}">{authorText(record.created_by)}</span>
+                {#each (record.fields.tags as string[] | undefined) ?? [] as tag (tag)}<span class="tag">{tag}</span>{/each}
+              </span>
             </span>
-          </a>
+          </Row>
         </li>
       {/each}
     </ul>
@@ -177,12 +181,12 @@
           {/each}
         </div>
         <div class="form-actions">
-          <button class="primary" type="submit" disabled={busy || !dirty}>{creating ? 'Create' : 'Save'}</button>
+          <button class="btn p" type="submit" disabled={busy || !dirty}>{creating ? 'Create' : 'Save'}</button>
           {#if current}
-            <button type="button" onclick={toggleReviewed} disabled={busy || dirty} title={dirty ? 'Save first' : ''}>
+            <button class="btn" type="button" onclick={toggleReviewed} disabled={busy || dirty} title={dirty ? 'Save first' : ''}>
               {current.reviewed ? 'Mark not reviewed' : 'Mark reviewed'}
             </button>
-            <button type="button" class="danger" onclick={remove} disabled={busy}>Delete</button>
+            <button type="button" class="lnk d" onclick={remove} disabled={busy}>Delete</button>
           {/if}
           {#if current && dirty}<span class="hint">Saving clears the reviewed mark.</span>{/if}
         </div>

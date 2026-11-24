@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Banner, Empty, LoadGate, Row } from '@tracon/ui/svelte';
   import FieldInput from './FieldInput.svelte';
   import { api, message, type HojaDocument, type TypeStatus } from './lib/api';
   import { authorText, formOf, href, patch, titleOf, when } from './lib/views';
@@ -8,6 +9,8 @@
   const usable = $derived(types.filter(t => t.config));
   let documents = $state<HojaDocument[]>([]);
   let error = $state('');
+  let loaded = $state(false);
+  let loadError = $state<string | null>(null);
   let creating = $state(false);
   let newType = $state('');
   let newTitle = $state('');
@@ -19,8 +22,9 @@
   async function load() {
     try {
       documents = await api.documents();
-      error = '';
-    } catch (e) { error = message(e, 'Could not load documents.'); }
+      loaded = true;
+      loadError = null;
+    } catch (e) { loadError = message(e, 'Could not load documents.'); }
   }
 
   function startNew() {
@@ -53,13 +57,13 @@
     <h1>Documents</h1>
   </div>
   <div class="actions">
-    <button class="primary" onclick={startNew} disabled={!usable.length}>New document</button>
+    <button class="btn" onclick={startNew} disabled={!usable.length}>New document</button>
   </div>
 </header>
 
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if error}<Banner tone="crit" role="alert">{error}</Banner>{/if}
 {#if !usable.length}
-  <p class="empty">No document types are accepted yet. Review them under <a href={href({ view: 'types' })}>Types</a>.</p>
+  <Empty>No document types are accepted yet. Review them under <a class="lnk" href={href({ view: 'types' })}>Types</a>.</Empty>
 {/if}
 
 {#if creating && newConfig}
@@ -81,26 +85,30 @@
       {/each}
     </div>
     <div class="form-actions">
-      <button class="primary" type="submit" disabled={busy || !newTitle.trim()}>Create</button>
-      <button type="button" onclick={() => creating = false}>Cancel</button>
+      <button class="btn p" type="submit" disabled={busy || !newTitle.trim()}>Create</button>
+      <button class="btn" type="button" onclick={() => creating = false}>Cancel</button>
     </div>
   </form>
 {/if}
 
-<ul class="doc-list">
-  {#each documents as doc (doc.id)}
-    <li>
-      <a class="card" href={href({ view: 'document', id: doc.id })}>
-        <span class="label">{doc.title}</span>
-        <span class="meta">
-          <span class="muted">{titleOf(doc.type, types.find(t => t.name === doc.type)?.config ?? undefined)}</span>
-          {#if doc.approved}<span class="badge ok">approved</span>{:else if doc.approved_at}<span class="badge warn">changed since approval</span>{:else}<span class="badge">draft</span>{/if}
-          <span class="badge author {doc.created_by?.author}">{authorText(doc.created_by)}</span>
-          <span class="muted">updated {when(doc.updated_at)}</span>
-        </span>
-      </a>
-    </li>
-  {:else}
-    <li class="empty">No documents yet.</li>
-  {/each}
-</ul>
+<LoadGate status={{ loaded, error: loadError }} what="documents" onretry={load}>
+  <ul class="doc-list">
+    {#each documents as doc (doc.id)}
+      <li>
+        <Row href={href({ view: 'document', id: doc.id })}>
+          <span class="doc">
+            <span class="label">{doc.title}</span>
+            <span class="meta">
+              <span class="muted">{titleOf(doc.type, types.find(t => t.name === doc.type)?.config ?? undefined)}</span>
+              {#if doc.approved}<span class="badge ok">approved</span>{:else if doc.approved_at}<span class="badge warn">changed since approval</span>{:else}<span class="badge">draft</span>{/if}
+              <span class="badge author {doc.created_by?.author}">{authorText(doc.created_by)}</span>
+              <span class="mono">updated {when(doc.updated_at)}</span>
+            </span>
+          </span>
+        </Row>
+      </li>
+    {:else}
+      <li><Empty>No documents yet.</Empty></li>
+    {/each}
+  </ul>
+</LoadGate>

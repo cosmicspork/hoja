@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Banner } from '@tracon/ui/svelte';
   import { onDestroy } from 'svelte';
   import { api, message, type HojaDocument, type TemplateChange, type TemplateStatus, type TypeChange, type TypeStatus } from './lib/api';
   import { collapse, lineDiff, titleOf, when } from './lib/views';
@@ -120,8 +121,8 @@
 </header>
 
 <p class="hint">Type files and templates take effect only after you accept their exact contents here. Until then hoja keeps using the copies you accepted last. Accepting a template change returns every approved document it renders to draft.</p>
-{#if typesError}<p class="error" role="alert">{typesError}</p>{/if}
-{#if error}<p class="error" role="alert">{error}</p>{/if}
+{#if typesError}<Banner tone="crit" role="alert">{typesError}</Banner>{/if}
+{#if error}<Banner tone="crit" role="alert">{error}</Banner>{/if}
 
 <ul class="type-list">
   {#each types as t (t.name)}
@@ -141,7 +142,7 @@
       {/if}
       {#if t.error}<pre class="error">{t.error}</pre>{/if}
       {#if t.state === 'new' || t.state === 'changed'}
-        <button onclick={() => review(t.name)}>Review changes</button>
+        <button class="btn" onclick={() => review(t.name)}>Review changes</button>
       {/if}
     </li>
   {:else}
@@ -154,8 +155,8 @@
     <div class="form-head">
       <h2>{open.name}.toml</h2>
       <div class="actions">
-        <button class="primary" onclick={accept} disabled={busy || !!open.error || !open.file_hash}>Accept this file</button>
-        <button onclick={() => open = null}>Close</button>
+        <button class="btn p" onclick={accept} disabled={busy || !!open.error || !open.file_hash}>Accept this file</button>
+        <button class="lnk" onclick={() => open = null}>Close</button>
       </div>
     </div>
     {#if open.error}<pre class="error">{open.error}</pre>{/if}
@@ -165,7 +166,7 @@
 {/if}
 
 <h2 class="subhead">Templates</h2>
-{#if templatesError}<p class="error" role="alert">{templatesError}</p>{/if}
+{#if templatesError}<Banner tone="crit" role="alert">{templatesError}</Banner>{/if}
 <ul class="type-list">
   {#each templates as t (t.path)}
     <li class="card">
@@ -179,7 +180,7 @@
       </p>
       {#if t.error}<pre class="error">{t.error}</pre>{/if}
       {#if t.state === 'new' || t.state === 'changed'}
-        <button onclick={() => reviewTemplate(t.path)}>Review changes</button>
+        <button class="btn" onclick={() => reviewTemplate(t.path)}>Review changes</button>
       {/if}
     </li>
   {:else}
@@ -192,8 +193,8 @@
     <div class="form-head">
       <h2>templates/{openTemplate.path}</h2>
       <div class="actions">
-        <button class="primary" onclick={acceptTemplate} disabled={busy || !!openTemplate.error || !openTemplate.file_hash}>Accept this file</button>
-        <button onclick={() => { openTemplate = null; clearPreview(); }}>Close</button>
+        <button class="btn p" onclick={acceptTemplate} disabled={busy || !!openTemplate.error || !openTemplate.file_hash}>Accept this file</button>
+        <button class="lnk" onclick={() => { openTemplate = null; clearPreview(); }}>Close</button>
       </div>
     </div>
     {#if openTemplate.error}<pre class="error">{openTemplate.error}</pre>{/if}
@@ -217,14 +218,14 @@
               <option value="">Sample data</option>
               {#each previewDocs as d (d.id)}<option value={d.id}>{d.title}</option>{/each}
             </select>
-            <button onclick={renderPreview} disabled={previewing || !previewType}>{previewing ? 'Rendering…' : 'Render'}</button>
+            <button class="btn" onclick={renderPreview} disabled={previewing || !previewType}>{previewing ? 'Rendering…' : 'Render'}</button>
           </div>
         </div>
         <p class="hint">Rendered with every other template as accepted, and with the type file as it is on disk.</p>
         {#if previewError}<pre class="error">{previewError}</pre>{/if}
         {#if previewUrl}
           <iframe title="Template preview" src={previewUrl}></iframe>
-          <a href={previewUrl} download="template-preview.pdf">Download this PDF</a>
+          <a class="lnk" href={previewUrl} download="template-preview.pdf">Download this PDF</a>
         {/if}
       </div>
     </div>

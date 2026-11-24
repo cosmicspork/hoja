@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Banner, Empty, Row, SideButton } from '@tracon/ui/svelte';
   import { onDestroy } from 'svelte';
   import FieldInput from './FieldInput.svelte';
   import Provenance from './Provenance.svelte';
@@ -139,16 +140,16 @@
       </div>
     </div>
     <div class="actions">
-      <button class="primary" onclick={approve} disabled={busy || doc.approved || view.blocking > 0 || fieldsDirty}
+      <button class="btn p" onclick={approve} disabled={busy || doc.approved || view.blocking > 0 || fieldsDirty}
         title={view.blocking > 0 ? 'Fix the lint errors first' : fieldsDirty ? 'Save first' : ''}>Approve</button>
       {#each view.exports as file (file.format)}
-        <button onclick={() => exportAs(file.format)} disabled={busy} title={file.filename}>Export {file.format.toUpperCase()}</button>
+        <button class="btn" onclick={() => exportAs(file.format)} disabled={busy} title={file.filename}>Export {file.format.toUpperCase()}</button>
       {/each}
     </div>
   </header>
 
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if notice}<p class="notice" role="status">{notice}</p>{/if}
+  {#if error}<Banner tone="crit" role="alert">{error}</Banner>{/if}
+  {#if notice}<Banner tone="ok" role="status">{notice}</Banner>{/if}
 
   <div class="doc-layout">
     <div class="doc-editor">
@@ -157,7 +158,7 @@
           <h3>Checks</h3>
           <ul>
             {#each view.lints as finding, i (i)}
-              <li class={finding.level}><span class="badge {finding.level === 'error' ? 'bad' : 'warn'}">{finding.level}</span> {finding.message}</li>
+              <li class={finding.level}><span class="badge {finding.level === 'error' ? 'bad' : ''}">{finding.level}</span> {finding.message}</li>
             {/each}
           </ul>
         </section>
@@ -175,7 +176,7 @@
           {/each}
         </div>
         <div class="form-actions">
-          <button class="primary" type="submit" disabled={busy || !fieldsDirty}>Save</button>
+          <button class="btn" type="submit" disabled={busy || !fieldsDirty}>Save</button>
         </div>
       </form>
 
@@ -194,28 +195,32 @@
             <ol class="chosen">
               {#each every as record (record.id)}
                 <li>
-                  <span class="label">{labelOf(record)}</span>
-                  {#if !record.reviewed}<span class="badge">not reviewed</span>{/if}
+                  <Row>
+                    <span class="label">{labelOf(record)}</span>
+                    {#if !record.reviewed}<span class="badge">not reviewed</span>{/if}
+                  </Row>
                 </li>
               {:else}
                 <li class="empty">No entries yet.</li>
               {/each}
             </ol>
             <div class="form-actions">
-              <a class="muted" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
+              <a class="lnk" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
             </div>
           {:else}
           <ol class="chosen">
             {#each chosen as recordId, index (recordId)}
               {@const record = byId.get(recordId)}
               <li>
-                <span class="label">{record ? labelOf(record) : 'Deleted record'}</span>
-                {#if record && !record.reviewed}<span class="badge">not reviewed</span>{/if}
-                <span class="row-actions">
-                  <button type="button" aria-label="Move up" onclick={() => shift(section.name, index, -1)} disabled={index === 0}>↑</button>
-                  <button type="button" aria-label="Move down" onclick={() => shift(section.name, index, 1)} disabled={index === chosen.length - 1}>↓</button>
-                  <button type="button" aria-label="Remove" onclick={() => remove(section.name, recordId)}>✕</button>
-                </span>
+                <Row>
+                  <span class="label">{record ? labelOf(record) : 'Deleted record'}</span>
+                  {#if record && !record.reviewed}<span class="badge">not reviewed</span>{/if}
+                  {#snippet actions()}
+                    <SideButton label="Move up" onclick={() => shift(section.name, index, -1)} disabled={index === 0}>↑</SideButton>
+                    <SideButton label="Move down" onclick={() => shift(section.name, index, 1)} disabled={index === chosen.length - 1}>↓</SideButton>
+                    <SideButton label="Remove" onclick={() => remove(section.name, recordId)}>✕</SideButton>
+                  {/snippet}
+                </Row>
               </li>
             {:else}
               <li class="empty">Nothing selected.</li>
@@ -226,15 +231,15 @@
               <summary>Add ({available.length} available)</summary>
               <ul class="available">
                 {#each available as record (record.id)}
-                  <li><button type="button" class="link" onclick={() => add(section.name, record.id)}>+ {labelOf(record)}</button></li>
+                  <li><button type="button" class="lnk" onclick={() => add(section.name, record.id)}>+ {labelOf(record)}</button></li>
                 {/each}
               </ul>
             </details>
           {/if}
           <div class="form-actions">
-            <button class="primary" onclick={() => saveSection(section.name)} disabled={busy || !sectionDirty(section.name)}>Save selection</button>
-            {#if sectionDirty(section.name)}<button type="button" onclick={() => selection[section.name] = [...saved(section.name)]}>Undo</button>{/if}
-            <a class="muted" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
+            <button class="btn" onclick={() => saveSection(section.name)} disabled={busy || !sectionDirty(section.name)}>Save selection</button>
+            {#if sectionDirty(section.name)}<button class="btn" type="button" onclick={() => selection[section.name] = [...saved(section.name)]}>Undo</button>{/if}
+            <a class="lnk" href={href({ view: 'records', type: sourceType(section), kind: section.kind })}>Edit {titleOf(section.kind, source?.kinds[section.kind]).toLowerCase()} records</a>
           </div>
           {/if}
         </section>
@@ -245,13 +250,13 @@
 
     <aside class="preview card">
       <div class="form-head">
-        <div class="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'provenance'} class:active={tab === 'provenance'} onclick={() => tab = 'provenance'}>Provenance</button>
+        <div class="segmented" role="tablist">
+          <button role="tab" aria-selected={tab === 'provenance'} class:on={tab === 'provenance'} onclick={() => tab = 'provenance'}>Provenance</button>
           {#if view.has_template}
-            <button role="tab" aria-selected={tab === 'pdf'} class:active={tab === 'pdf'} onclick={() => { tab = 'pdf'; if (!previewUrl) preview(); }}>PDF</button>
+            <button role="tab" aria-selected={tab === 'pdf'} class:on={tab === 'pdf'} onclick={() => { tab = 'pdf'; if (!previewUrl) preview(); }}>PDF</button>
           {/if}
         </div>
-        {#if tab === 'pdf'}<button onclick={preview} disabled={previewing}>{previewing ? 'Rendering…' : 'Refresh'}</button>{/if}
+        {#if tab === 'pdf'}<button class="btn" onclick={preview} disabled={previewing}>{previewing ? 'Rendering…' : 'Refresh'}</button>{/if}
       </div>
       {#if tab === 'provenance'}
         <Provenance provenance={view.provenance} approvedAt={doc.approved_at} />
@@ -261,13 +266,13 @@
         {#if previewUrl}
           <iframe title="PDF preview" src={previewUrl}></iframe>
           <!-- Inside Tracon the page is framed and may not show PDFs; the file still downloads. -->
-          <a href={previewUrl} download={view.exports.find(f => f.format === 'pdf')?.filename ?? 'preview.pdf'}>Download this PDF</a>
+          <a class="lnk" href={previewUrl} download={view.exports.find(f => f.format === 'pdf')?.filename ?? 'preview.pdf'}>Download this PDF</a>
         {/if}
       {/if}
     </aside>
   </div>
 {:else if error}
-  <p class="error" role="alert">{error}</p>
+  <Banner tone="crit" role="alert">{error}</Banner>
 {:else}
-  <p class="empty">Loading…</p>
+  <Empty loading>Loading…</Empty>
 {/if}
