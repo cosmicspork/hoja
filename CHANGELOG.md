@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/cosmicspork/hoja/compare/v0.5.0...v0.5.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* withdraw a card from Tracon's queue once it is decided in hoja's page ([#19](https://github.com/cosmicspork/hoja/issues/19)) ([08ff274](https://github.com/cosmicspork/hoja/commit/08ff27444a956157a839bd716347374024e3b1d2))
+
 ## [0.5.0](https://github.com/cosmicspork/hoja/compare/v0.4.0...v0.5.0) (2026-11-24)
 
 
