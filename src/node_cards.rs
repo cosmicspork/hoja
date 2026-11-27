@@ -18,6 +18,12 @@
 //! runs. A card the node can't raise, or one it no longer knows, waits in
 //! hoja's own page.
 //!
+//! A raised card is also still in hoja's page, and the person may decide it
+//! there first. Then the Tracon approval is moot, and [`withdraw_decided`]
+//! takes it back (`approval/withdraw`) so it leaves the operator's queue.
+//! Each link is closed once its Tracon approval is done with: settled from
+//! there, or withdrawn.
+//!
 //! Raised for an agent's call, a card passes that call's signed caller
 //! context (`_meta.tracon`) as `on_behalf`, so the node files it with the
 //! agent's session as well, and hoja names the agent from that same context
@@ -36,7 +42,11 @@ use crate::store::{Store, StoreError};
 
 /// The node methods a plugin that raises its cards there names in its
 /// manifest (`node_methods`).
-pub const NODE_METHODS: &[&str] = &["approval/request", "approval/status"];
+pub const NODE_METHODS: &[&str] = &["approval/request", "approval/status", "approval/withdraw"];
+
+/// What the node answers a method it does not have, or one the manifest it
+/// installed hoja from does not name.
+pub const METHOD_NOT_FOUND: i64 = -32601;
 
 /// What the node answers a call whose params it does not take, among them
 /// an `approval/status` for a card it did not raise for this plugin.
@@ -359,6 +369,7 @@ pub async fn settle(store: &Store, node: &NodeSocket) -> Result<Vec<Settled>, No
             )?,
             other => other?,
         };
+        store.close_node_card(&card_id)?;
         out.push(Settled {
             card_id,
             approval_id,
@@ -369,32 +380,144 @@ pub async fn settle(store: &Store, node: &NodeSocket) -> Result<Vec<Settled>, No
     Ok(out)
 }
 
-/// [`settle`], every [`SETTLE_EVERY`], for as long as the plugin runs. It
-/// starts with what an earlier start raised, since the links are kept in the
-/// store. A failure is logged once, until it changes or clears, and the
-/// cards it holds up keep waiting in both queues.
-pub async fn settle_loop(store: Arc<Store>, node: NodeSocket) {
-    let mut failing: Option<String> = None;
-    loop {
-        match settle(&store, &node).await {
+/// What [`withdraw_decided`] did with one card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Withdrawn {
+    pub card_id: String,
+    pub approval_id: String,
+    /// The card's state here.
+    pub state: String,
+    /// The node withdrew it now. False when the node no longer knew it, or
+    /// it was already settled there (expired, say): it answers such a card
+    /// as it stands.
+    pub withdrew: bool,
+}
+
+/// The reason given to the node for withdrawing a card decided here.
+fn withdraw_reason(state: &str) -> String {
+    match state {
+        "accepted" => "accepted in hoja's page".into(),
+        "rejected" => "rejected in hoja's page".into(),
+        "changes_requested" => "changes requested in hoja's page".into(),
+        other => format!("{} in hoja's page", other.replace('_', " ")),
+    }
+}
+
+/// Withdraw from Tracon's queue every card raised there that was decided
+/// here first, and close its link. One the node no longer knows (`-32602`)
+/// is closed too: there is nothing left there to withdraw. Any other
+/// refusal, a node without `approval/withdraw` among them, stops the pass
+/// with the link still open.
+pub async fn withdraw_decided(
+    store: &Store,
+    node: &NodeSocket,
+) -> Result<Vec<Withdrawn>, NodeError> {
+    let mut out = Vec::new();
+    for (card_id, approval_id, state) in store.node_cards_to_withdraw()? {
+        let params = json!({ "approval_id": approval_id, "reason": withdraw_reason(&state) });
+        let withdrew = match node.call("approval/withdraw", params).await {
+            Ok(answer) => answer["withdrew"].as_bool().unwrap_or(false),
+            Err(NodeError::Refused { code, .. }) if code == INVALID_PARAMS => false,
+            Err(e) => return Err(e),
+        };
+        store.close_node_card(&card_id)?;
+        out.push(Withdrawn {
+            card_id,
+            approval_id,
+            state,
+            withdrew,
+        });
+    }
+    Ok(out)
+}
+
+/// One run of [`settle_loop`]: what it has already said, so a failure is
+/// logged once, until it changes or clears.
+#[derive(Debug, Default)]
+pub struct Settler {
+    settle_failing: Option<String>,
+    withdraw_failing: Option<String>,
+    /// The node has no `approval/withdraw`, so cards decided here stay in
+    /// its queue until they expire. Not asked again this run.
+    cannot_withdraw: bool,
+}
+
+impl Settler {
+    /// [`settle`], then [`withdraw_decided`]: the lines to log. Settling goes
+    /// first, and a withdraw that fails holds up no decision.
+    pub async fn pass(&mut self, store: &Store, node: &NodeSocket) -> Vec<String> {
+        let mut log = Vec::new();
+        match settle(store, node).await {
             Ok(settled) => {
-                if failing.take().is_some() {
-                    eprintln!("hoja: reading decisions from Tracon again");
+                if self.settle_failing.take().is_some() {
+                    log.push("reading decisions from Tracon again".into());
                 }
                 for s in settled {
-                    eprintln!(
-                        "hoja: card {} {} from Tracon approval {}",
+                    log.push(format!(
+                        "card {} {} from Tracon approval {}",
                         s.card_id, s.state, s.approval_id
-                    );
+                    ));
                 }
             }
             Err(e) => {
                 let why = e.to_string();
-                if failing.as_deref() != Some(why.as_str()) {
-                    eprintln!("hoja: could not read decisions from Tracon: {why}");
-                    failing = Some(why);
+                if self.settle_failing.as_deref() != Some(why.as_str()) {
+                    log.push(format!("could not read decisions from Tracon: {why}"));
+                    self.settle_failing = Some(why);
                 }
             }
+        }
+        if self.cannot_withdraw {
+            return log;
+        }
+        match withdraw_decided(store, node).await {
+            Ok(withdrawn) => {
+                if self.withdraw_failing.take().is_some() {
+                    log.push("withdrawing decided cards from Tracon again".into());
+                }
+                for w in withdrawn {
+                    log.push(match w.withdrew {
+                        true => format!(
+                            "card {} {} here; withdrew Tracon approval {}",
+                            w.card_id, w.state, w.approval_id
+                        ),
+                        false => format!(
+                            "card {} {} here; Tracon approval {} was already settled there",
+                            w.card_id, w.state, w.approval_id
+                        ),
+                    });
+                }
+            }
+            Err(NodeError::Refused { code, message }) if code == METHOD_NOT_FOUND => {
+                self.cannot_withdraw = true;
+                log.push(format!(
+                    "this node can't withdraw cards ({message}); a card decided in hoja's page \
+                     stays in Tracon's queue until it expires"
+                ));
+            }
+            Err(e) => {
+                let why = e.to_string();
+                if self.withdraw_failing.as_deref() != Some(why.as_str()) {
+                    log.push(format!(
+                        "could not withdraw decided cards from Tracon: {why}"
+                    ));
+                    self.withdraw_failing = Some(why);
+                }
+            }
+        }
+        log
+    }
+}
+
+/// [`Settler::pass`], every [`SETTLE_EVERY`], for as long as the plugin
+/// runs. It starts with what an earlier start raised, since the links are
+/// kept in the store. A failure leaves the cards it holds up as they are,
+/// to try again on the next pass.
+pub async fn settle_loop(store: Arc<Store>, node: NodeSocket) {
+    let mut settler = Settler::default();
+    loop {
+        for line in settler.pass(&store, &node).await {
+            eprintln!("hoja: {line}");
         }
         tokio::time::sleep(SETTLE_EVERY).await;
     }
