@@ -77,6 +77,8 @@ CREATE TABLE template_files(path TEXT PRIMARY KEY, accepted_hash TEXT NOT NULL, 
 ALTER TABLE documents ADD COLUMN approved_content TEXT;
 ", "
 CREATE TABLE node_cards(card_id TEXT PRIMARY KEY REFERENCES approvals(id), approval_id TEXT NOT NULL UNIQUE, raised_at TEXT NOT NULL);
+", "
+ALTER TABLE node_cards ADD COLUMN closed_at TEXT;
 "];
 
 /// How a write is attributed in its revision.
@@ -1194,6 +1196,38 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()
+            .map_err(internal)
+    }
+
+    /// Mark card `card_id`'s Tracon approval as done with: settled from
+    /// Tracon, or withdrawn there after the card was decided here.
+    pub fn close_node_card(&self, card_id: &str) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "UPDATE node_cards SET closed_at=?2 WHERE card_id=?1 AND closed_at IS NULL",
+                params![card_id, now_utc()],
+            )
+            .map_err(internal)?;
+        Ok(())
+    }
+
+    /// `(card, Tracon approval, state here)` for each card raised in Tracon
+    /// and decided here whose Tracon approval is still open, oldest first.
+    /// Links made before `closed_at` existed start open, so a card decided
+    /// in hoja's page back then is among them.
+    pub fn node_cards_to_withdraw(&self) -> Result<Vec<(String, String, String)>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT n.card_id, n.approval_id, a.state FROM node_cards n JOIN approvals a ON a.id=n.card_id \
+                 WHERE a.state<>'pending' AND n.closed_at IS NULL ORDER BY n.raised_at, n.card_id",
+            )
+            .map_err(internal)?;
+        statement
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(internal)?
+            .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(internal)
     }
 

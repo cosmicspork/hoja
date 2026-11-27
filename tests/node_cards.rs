@@ -1,9 +1,11 @@
 //! Cards raised in Tracon's queue (`hoja::node_cards`), against a fake of
 //! the socket the node serves a plugin: an agent's edit to a record the
 //! person wrote becomes a card here, is raised there as a word diff, and is
-//! decided here once the operator decides it there.
+//! decided here once the operator decides it there. One the person decides
+//! here first is withdrawn there.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -15,8 +17,8 @@ use axum::{
 };
 use hoja::config::Workspace;
 use hoja::gates::{Actor, Author};
-use hoja::model::{CreateRecord, Outcome, UpdateRecord};
-use hoja::node_cards::{self, NodeSocket};
+use hoja::model::{CreateRecord, Decide, Decision, Outcome, UpdateRecord};
+use hoja::node_cards::{self, NodeSocket, Settler};
 use hoja::store::Store;
 use serde_json::{Map, Value, json};
 
@@ -35,12 +37,21 @@ required = true
 type = "tags"
 "#;
 
-/// The node, as far as hoja uses it: cards asked, and decisions the test
-/// sets.
+/// The node, as far as hoja uses it: cards asked, decisions the test sets,
+/// and every `approval/withdraw` asked of it. With `no_withdraw` it answers
+/// as a node whose manifest for hoja doesn't name that method.
 #[derive(Clone, Default)]
 struct Node {
     asked: Arc<Mutex<Vec<Value>>>,
     decided: Arc<Mutex<HashMap<String, Value>>>,
+    withdrawals: Arc<Mutex<Vec<Value>>>,
+    no_withdraw: Arc<AtomicBool>,
+}
+
+impl Node {
+    fn withdrawals(&self) -> Vec<Value> {
+        self.withdrawals.lock().unwrap().clone()
+    }
 }
 
 async fn rpc(
@@ -76,6 +87,34 @@ async fn rpc(
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| json!({ "approval_id": id, "state": "still_waiting" }))
+        }
+        Some("approval/withdraw") => {
+            node.withdrawals.lock().unwrap().push(params.clone());
+            let id = params["approval_id"].as_str().unwrap_or_default();
+            if node.no_withdraw.load(Ordering::SeqCst) {
+                let error = json!({ "jsonrpc": "2.0", "id": request["id"], "error": { "code": -32601, "message": "approval/withdraw is not in hoja's node_methods, so the node does not answer it" } });
+                return (StatusCode::OK, Json(error));
+            }
+            if id.starts_with("forgotten-") {
+                let error = json!({ "jsonrpc": "2.0", "id": request["id"], "error": { "code": -32602, "message": format!("no card {id} raised by plugin hoja on personal") } });
+                return (StatusCode::OK, Json(error));
+            }
+            // A card already settled is answered as it stands.
+            let mut decided = node.decided.lock().unwrap();
+            match decided.get(id) {
+                Some(settled) => {
+                    let mut answer = settled.clone();
+                    answer["withdrew"] = json!(false);
+                    answer
+                }
+                None => {
+                    let withdrawn = json!({ "approval_id": id, "state": "withdrawn", "reason": params["reason"] });
+                    decided.insert(id.to_string(), withdrawn.clone());
+                    let mut answer = withdrawn;
+                    answer["withdrew"] = json!(true);
+                    answer
+                }
+            }
         }
         _ => {
             let error = json!({ "jsonrpc": "2.0", "id": request["id"], "error": { "code": -32601, "message": "no such method" } });
@@ -360,4 +399,192 @@ async fn a_card_the_node_does_not_know_goes_back_to_hojas_queue() {
     assert_eq!(f.store.node_card(&lost).unwrap(), None);
     assert_eq!(f.store.approval(&lost).unwrap().state, "pending");
     assert!(f.store.node_cards_waiting().unwrap().is_empty());
+}
+
+/// The person decides card `card` in hoja's page, as `http::decide` does.
+fn person_decides(f: &Fixture, card: &str, decision: Decision, reason: Option<&str>) {
+    f.store
+        .decide(
+            &Actor::Person,
+            card,
+            Decide {
+                decision,
+                reason: reason.map(str::to_string),
+                payload: None,
+            },
+        )
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_card_decided_in_hojas_page_is_withdrawn_from_tracons_queue_once() {
+    let f = fixture().await;
+    let mut raised = Vec::new();
+    for (i, (decision, reason)) in [
+        (Decision::Accept, None),
+        (Decision::Reject, Some("not true")),
+        (Decision::RequestChanges, Some("say which engine")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (_, card) = agent_edit(&f, "claude", &format!("Edit {i}"));
+        let approval = node_cards::raise(&f.store, &f.socket, &card, None)
+            .await
+            .unwrap();
+        person_decides(&f, &card, decision, reason);
+        raised.push((card, approval));
+    }
+
+    let mut settler = Settler::default();
+    let log = settler.pass(&f.store, &f.socket).await;
+    assert_eq!(
+        f.node.withdrawals(),
+        [
+            json!({ "approval_id": raised[0].1, "reason": "accepted in hoja's page" }),
+            json!({ "approval_id": raised[1].1, "reason": "rejected in hoja's page" }),
+            json!({ "approval_id": raised[2].1, "reason": "changes requested in hoja's page" }),
+        ]
+    );
+    assert_eq!(log.len(), 3, "{log:?}");
+    assert!(log[0].contains(&format!("withdrew Tracon approval {}", raised[0].1)));
+    // Decided here, and nothing there changes that.
+    let states: Vec<String> = raised
+        .iter()
+        .map(|(card, _)| f.store.approval(card).unwrap().state)
+        .collect();
+    assert_eq!(states, ["accepted", "rejected", "changes_requested"]);
+
+    // Closed: never asked again, by this run or the next.
+    assert!(f.store.node_cards_to_withdraw().unwrap().is_empty());
+    assert!(settler.pass(&f.store, &f.socket).await.is_empty());
+    assert!(
+        Settler::default()
+            .pass(&f.store, &f.socket)
+            .await
+            .is_empty()
+    );
+    assert_eq!(f.node.withdrawals().len(), 3);
+}
+
+#[tokio::test]
+async fn a_card_settled_from_tracon_is_never_withdrawn() {
+    let f = fixture().await;
+    for (i, decision) in [
+        json!({ "state": "approved" }),
+        json!({ "state": "rejected", "reason": "no" }),
+        json!({ "state": "changes_requested", "notes": "again" }),
+        json!({ "state": "expired" }),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (_, card) = agent_edit(&f, "claude", &format!("Edit {i}"));
+        let approval = node_cards::raise(&f.store, &f.socket, &card, None)
+            .await
+            .unwrap();
+        f.node.decided.lock().unwrap().insert(approval, decision);
+    }
+    let mut settler = Settler::default();
+    assert_eq!(settler.pass(&f.store, &f.socket).await.len(), 4);
+    assert!(settler.pass(&f.store, &f.socket).await.is_empty());
+    assert!(f.node.withdrawals().is_empty());
+    assert!(f.store.node_cards_to_withdraw().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn without_approval_withdraw_a_decided_card_waits_there_and_others_settle() {
+    let f = fixture().await;
+    f.node.no_withdraw.store(true, Ordering::SeqCst);
+    let (_, decided_here) = agent_edit(&f, "claude", "Decided here");
+    node_cards::raise(&f.store, &f.socket, &decided_here, None)
+        .await
+        .unwrap();
+    person_decides(&f, &decided_here, Decision::Accept, None);
+    let (_, decided_there) = agent_edit(&f, "claude", "Decided there");
+    let there = node_cards::raise(&f.store, &f.socket, &decided_there, None)
+        .await
+        .unwrap();
+    f.node
+        .decided
+        .lock()
+        .unwrap()
+        .insert(there, json!({ "state": "approved" }));
+
+    let mut settler = Settler::default();
+    let log = settler.pass(&f.store, &f.socket).await;
+    assert_eq!(log.len(), 2, "{log:?}");
+    assert!(log[0].contains("accepted from Tracon approval"), "{log:?}");
+    assert!(log[1].contains("can't withdraw cards"), "{log:?}");
+    assert_eq!(f.store.approval(&decided_here).unwrap().state, "accepted");
+    assert_eq!(f.store.approval(&decided_there).unwrap().state, "accepted");
+    assert_eq!(f.node.withdrawals().len(), 1);
+
+    // Said once, and not asked again this run; settling goes on.
+    let (_, later) = agent_edit(&f, "claude", "Later");
+    let approval = node_cards::raise(&f.store, &f.socket, &later, None)
+        .await
+        .unwrap();
+    f.node
+        .decided
+        .lock()
+        .unwrap()
+        .insert(approval, json!({ "state": "rejected", "reason": "no" }));
+    let log = settler.pass(&f.store, &f.socket).await;
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(log[0].contains("rejected from Tracon approval"), "{log:?}");
+    assert!(settler.pass(&f.store, &f.socket).await.is_empty());
+    assert_eq!(f.node.withdrawals().len(), 1);
+    // The link stays open, for a node that can withdraw it later.
+    assert_eq!(f.store.node_cards_to_withdraw().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_decided_card_the_node_does_not_know_is_closed() {
+    let f = fixture().await;
+    let (_, card) = agent_edit(&f, "claude", "Lost there");
+    f.store.link_node_card(&card, "forgotten-2").unwrap();
+    person_decides(&f, &card, Decision::Accept, None);
+    let withdrawn = node_cards::withdraw_decided(&f.store, &f.socket)
+        .await
+        .unwrap();
+    assert_eq!(withdrawn.len(), 1);
+    assert_eq!(withdrawn[0].approval_id, "forgotten-2");
+    assert!(!withdrawn[0].withdrew);
+    assert!(f.store.node_cards_to_withdraw().unwrap().is_empty());
+    assert_eq!(f.node.withdrawals().len(), 1);
+}
+
+#[tokio::test]
+async fn a_card_decided_here_before_withdrawing_existed_is_withdrawn_on_upgrade() {
+    let f = fixture().await;
+    let (_, card) = agent_edit(&f, "claude", "Decided last week");
+    let approval = node_cards::raise(&f.store, &f.socket, &card, None)
+        .await
+        .unwrap();
+    person_decides(&f, &card, Decision::Accept, None);
+
+    // The database as the previous release left it: schema version 3, with
+    // no `closed_at` on its links.
+    let Fixture {
+        _dir,
+        store,
+        node,
+        socket,
+    } = f;
+    drop(store);
+    let path = _dir.path().join("hoja.sqlite3");
+    let old = rusqlite::Connection::open(&path).unwrap();
+    old.execute_batch("ALTER TABLE node_cards DROP COLUMN closed_at; PRAGMA user_version=3;")
+        .unwrap();
+    drop(old);
+
+    let store = Store::init(&path).unwrap();
+    let log = Settler::default().pass(&store, &socket).await;
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(
+        node.withdrawals(),
+        [json!({ "approval_id": approval, "reason": "accepted in hoja's page" })]
+    );
+    assert!(store.node_cards_to_withdraw().unwrap().is_empty());
 }

@@ -809,6 +809,7 @@ struct Node {
     offers: bool,
     asked: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
     decided: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Value>>>,
+    withdrawals: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
     _dir: std::sync::Arc<tempfile::TempDir>,
     path: PathBuf,
 }
@@ -822,6 +823,7 @@ impl Node {
             offers,
             asked: Default::default(),
             decided: Default::default(),
+            withdrawals: Default::default(),
             _dir: std::sync::Arc::new(dir),
             path: path.clone(),
         };
@@ -867,6 +869,18 @@ impl Node {
                             || json!({"approval_id": approval, "state": "still_waiting"}),
                         )
                 }
+                "approval/withdraw" => {
+                    node.withdrawals.lock().unwrap().push(params.clone());
+                    let approval = params["approval_id"].as_str().unwrap_or_default();
+                    let withdrawn = json!({"approval_id": approval, "state": "withdrawn"});
+                    node.decided
+                        .lock()
+                        .unwrap()
+                        .insert(approval.to_string(), withdrawn.clone());
+                    let mut answer = withdrawn;
+                    answer["withdrew"] = json!(true);
+                    answer
+                }
                 _ => {
                     return (
                         axum::http::StatusCode::OK,
@@ -887,6 +901,10 @@ impl Node {
 
     fn asked(&self) -> Vec<Value> {
         self.asked.lock().unwrap().clone()
+    }
+
+    fn withdrawals(&self) -> Vec<Value> {
+        self.withdrawals.lock().unwrap().clone()
     }
 
     fn decide(&self, approval: &str, decision: Value) {
@@ -1013,6 +1031,40 @@ async fn a_tool_card_rejected_in_tracon_is_closed_with_the_reason() {
     assert_eq!(status["state"], "rejected", "{status}");
     assert_eq!(status["reason"], "Not a risk yet");
     assert!(plugin.records().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_tool_card_decided_in_hojas_page_leaves_tracons_queue() {
+    let node = Node::start(true).await;
+    let plugin = Plugin::start_with(copy_example, Some(&node.path)).await;
+    plugin.accept("raid").await;
+    let create = json!({"type": "raid", "kind": "risk", "fields": {"title": "Vendor slips"}});
+    let (error, risk) = plugin.tool("record_create", create).await;
+    assert!(!error, "{risk}");
+    let card = risk["approval_id"].as_str().unwrap().to_string();
+    assert_eq!(node.asked().len(), 1);
+
+    // The person accepts it in hoja's page before the operator gets to it
+    // in Tracon's queue: hoja takes it back out of there.
+    let body = json!({"decision": "accept"}).to_string();
+    let path = format!("/api/approvals/{card}/decide");
+    let (status, decided) = plugin.person("POST", &path, &body).await;
+    assert_eq!(status, 200, "{decided}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while node.withdrawals().is_empty() {
+        assert!(Instant::now() < deadline, "the card was never withdrawn");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        node.withdrawals(),
+        [json!({"approval_id": "tracon-1", "reason": "accepted in hoja's page"})]
+    );
+    assert_eq!(plugin.card_status(&card, 0).await["state"], "accepted");
+    assert_eq!(plugin.records().await.len(), 1);
+
+    // Once: the next passes leave it alone.
+    tokio::time::sleep(hoja::node_cards::SETTLE_EVERY * 2).await;
+    assert_eq!(node.withdrawals().len(), 1);
 }
 
 #[tokio::test]
